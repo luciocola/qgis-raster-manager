@@ -150,6 +150,7 @@ class HEIFTTLImporter:
             warp = self.dialog.chkWarp.isChecked()
             add_to_map = self.dialog.chkAddToMap.isChecked()
             generate_rdf = self.dialog.chkGenerateRDF.isChecked()
+            export_jp2 = self.dialog.chkExportJP2.isChecked() if hasattr(self.dialog, 'chkExportJP2') else False
             resample = self.dialog.get_resample_method()
             orthorectify = self.dialog.get_orthorectify_enabled()
             transform_order = self.dialog.get_transform_order()
@@ -219,7 +220,16 @@ class HEIFTTLImporter:
             # Determine output filename
             heif_name = Path(heif_path).stem
             suffix = "_orthorectified" if orthorectify else "_georeferenced"
-            output_filename = f"{heif_name}{suffix}.tif"
+            
+            # Choose file extension based on export format
+            if export_jp2:
+                output_ext = ".jp2"
+                self.log_message("Export format: JPEG2000 (.jp2)")
+            else:
+                output_ext = ".tif"
+                self.log_message("Export format: GeoTIFF (.tif)")
+            
+            output_filename = f"{heif_name}{suffix}{output_ext}"
             output_path = os.path.join(output_dir, output_filename)
             
             # Update progress
@@ -227,10 +237,17 @@ class HEIFTTLImporter:
             
             # Process HEIF with TTL - reuse processor from dialog to preserve internal RDF
             processor = self.dialog.heif_processor if self.dialog.heif_processor else HEIFProcessor()
-            if orthorectify:
-                self.log_message("Converting HEIF with orthorectification...")
+            
+            # Log processing mode
+            if export_jp2:
+                mode_text = "JPEG2000" + (" with orthorectification" if orthorectify else "")
             else:
-                self.log_message("Converting HEIF to georeferenced GeoTIFF...")
+                mode_text = "GeoTIFF" + (" with orthorectification" if orthorectify else "")
+            self.log_message(f"Converting HEIF to {mode_text}...")
+            
+            # Set export format in processor
+            if export_jp2:
+                processor.export_format = 'JP2'
             
             success, provenance = processor.process_heif_with_ttl(
                 heif_path, 
@@ -254,7 +271,7 @@ class HEIFTTLImporter:
             # Generate RDF/TTL provenance if requested
             if generate_rdf:
                 self.log_message("Generating RDF/TTL provenance file...")
-                ttl_file = output_path.replace('.tif', '_provenance.ttl')
+                ttl_file = output_path.replace(output_ext, '_provenance.ttl')
                 rdf_path = processor.generate_rdf_provenance(provenance, ttl_file)
                 if rdf_path:
                     self.log_message(f"RDF provenance generated: {rdf_path}")

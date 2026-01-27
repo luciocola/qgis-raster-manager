@@ -219,6 +219,19 @@
        </widget>
       </item>
       <item>
+       <widget class="QCheckBox" name="chkExportJP2">
+        <property name="text">
+         <string>Export as JPEG2000 (.jp2) instead of GeoTIFF</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+        <property name="toolTip">
+         <string>Export as JPEG2000 format with better compression (20-30% smaller) and native QGIS support. Requires heif-enc or GDAL JPEG2000 driver.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="QCheckBox" name="chkGenerateRDF">
         <property name="text">
          <string>Generate RDF/TTL provenance file</string>

@@ -42,6 +42,7 @@ class HEIFProcessor:
         self.tiling_mode = None  # 'grid', 'tili', or 'unci'
         self.supports_signed_int = False  # ISO/IEC 23001-17 signed integers (PR #1644)
         self.supports_sai = False  # Sample Auxiliary Information for GIMI
+        self.export_format = 'GTIFF'  # 'GTIFF' or 'JP2'
         
     def is_heif_supported(self) -> bool:
         """Check if HEIF format is supported"""
@@ -829,6 +830,204 @@ class HEIFProcessor:
             print(f"Error converting HEIF to TIFF: {e}")
             return None
     
+    def convert_heif_to_jp2(self, heif_path: str, output_path: Optional[str] = None, 
+                           lossless: bool = True) -> Optional[str]:
+        """
+        Convert HEIF to JPEG2000 using heif-enc (experimental).
+        
+        JPEG2000 advantages:
+        - Better compression than TIFF (20-30% smaller)
+        - Native QGIS/GDAL support
+        - Multi-resolution pyramids
+        - Lossless and lossy modes
+        - Excellent for large imagery
+        
+        Args:
+            heif_path: Path to input HEIF file
+            output_path: Optional output path. If None, creates temp file
+            lossless: If True, use lossless compression (default)
+            
+        Returns:
+            Path to output JP2 file or None on error
+        """
+        if not self.heif_enc_cmd:
+            if not self.check_heif_enc_available():
+                print("heif-enc not available. Cannot convert to JPEG2000.")
+                print("Install libheif: https://github.com/strukturag/libheif")
+                return None
+        
+        # Determine output path
+        if output_path is None:
+            temp_file = tempfile.NamedTemporaryFile(suffix='.jp2', delete=False)
+            output_path = temp_file.name
+            temp_file.close()
+            self.temp_files.append(output_path)
+        
+        # Build command
+        cmd = [
+            self.heif_enc_cmd,
+            '--jpeg2000',
+            heif_path,
+            '-o', output_path
+        ]
+        
+        if lossless:
+            cmd.insert(2, '-L')  # Lossless mode
+        
+        try:
+            print(f"Converting HEIF to JPEG2000: {os.path.basename(heif_path)}")
+            result = subprocess.run(cmd, 
+                                  capture_output=True, 
+                                  text=True, 
+                                  timeout=60)
+            
+            if result.returncode == 0 and os.path.exists(output_path):
+                print(f"Successfully converted to JPEG2000: {output_path}")
+                return output_path
+            else:
+                print(f"JPEG2000 conversion failed: {result.stderr}")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            print("JPEG2000 conversion timed out")
+            return None
+        except Exception as e:
+            print(f"Error converting to JPEG2000: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def convert_heif_to_jp2_via_gdal(self, heif_path: str, output_path: Optional[str] = None) -> Optional[str]:
+        """
+        Convert HEIF to JPEG2000 via TIFF intermediate (fallback method).
+        
+        Uses: HEIF → TIFF → JPEG2000
+        
+        Args:
+            heif_path: Path to input HEIF file
+            output_path: Optional output path for JP2 file
+            
+        Returns:
+            Path to output JP2 file or None on error
+        """
+        try:
+            # Step 1: Convert HEIF to TIFF
+            tiff_path = self.convert_heif_to_tiff(heif_path)
+            if not tiff_path:
+                return None
+            
+            # Determine output path
+            if output_path is None:
+                temp_file = tempfile.NamedTemporaryFile(suffix='.jp2', delete=False)
+                output_path = temp_file.name
+                temp_file.close()
+                self.temp_files.append(output_path)
+            
+            # Step 2: Convert TIFF to JPEG2000 using GDAL
+            ds = gdal.Open(tiff_path, gdal.GA_ReadOnly)
+            if ds is None:
+                print(f"Could not open TIFF: {tiff_path}")
+                return None
+            
+            # Try JP2OpenJPEG driver (most common)
+            driver = gdal.GetDriverByName('JP2OpenJPEG')
+            if driver is None:
+                # Try other JP2 drivers
+                for driver_name in ['JP2KAK', 'JP2ECW', 'JPEG2000']:
+                    driver = gdal.GetDriverByName(driver_name)
+                    if driver:
+                        break
+            
+            if driver is None:
+                print("No JPEG2000 driver available in GDAL")
+                return None
+            
+            # Create JPEG2000 with options
+            options = [
+                'QUALITY=100',      # Lossless quality
+                'REVERSIBLE=YES',   # Lossless compression
+                'YCBCR420=NO',      # Preserve full color
+                'GMLJP2=NO'         # Skip GML boxes for now
+            ]
+            
+            print(f"Converting TIFF to JPEG2000 using {driver.ShortName}...")
+            out_ds = driver.CreateCopy(output_path, ds, strict=0, options=options)
+            
+            if out_ds:
+                out_ds.FlushCache()
+                out_ds = None
+                ds = None
+                print(f"Successfully converted to JPEG2000: {output_path}")
+                return output_path
+            else:
+                ds = None
+                print("JPEG2000 creation failed")
+                return None
+                
+        except Exception as e:
+            print(f"Error in GDAL JPEG2000 conversion: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def convert_tiff_to_jp2(self, tiff_path: str, output_path: str) -> bool:
+        """
+        Convert a GeoTIFF to JPEG2000, preserving georeferencing.
+        
+        Args:
+            tiff_path: Path to input GeoTIFF
+            output_path: Path for output JP2 file
+            
+        Returns:
+            True on success, False on error
+        """
+        try:
+            ds = gdal.Open(tiff_path, gdal.GA_ReadOnly)
+            if ds is None:
+                print(f"Could not open TIFF: {tiff_path}")
+                return False
+            
+            # Find JPEG2000 driver
+            driver = gdal.GetDriverByName('JP2OpenJPEG')
+            if driver is None:
+                for driver_name in ['JP2KAK', 'JP2ECW', 'JPEG2000']:
+                    driver = gdal.GetDriverByName(driver_name)
+                    if driver:
+                        break
+            
+            if driver is None:
+                print("No JPEG2000 driver available in GDAL")
+                return False
+            
+            # JPEG2000 creation options
+            options = [
+                'QUALITY=100',
+                'REVERSIBLE=YES',
+                'YCBCR420=NO',
+                'GMLJP2=YES',
+                'GeoJP2=YES'
+            ]
+            
+            print(f"Converting to JPEG2000 using {driver.ShortName}...")
+            out_ds = driver.CreateCopy(output_path, ds, strict=0, options=options)
+            
+            if out_ds:
+                out_ds.FlushCache()
+                out_ds = None
+                ds = None
+                print(f"Successfully converted to JPEG2000: {output_path}")
+                return True
+            else:
+                ds = None
+                print("JPEG2000 conversion failed")
+                return False
+                
+        except Exception as e:
+            print(f"Error converting TIFF to JPEG2000: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
     def create_georeferenced_tiff(self, input_tiff: str, gcps: list, output_path: str, 
                                   epsg: int = 4326) -> bool:
         """
@@ -897,6 +1096,82 @@ class HEIFProcessor:
             
         except Exception as e:
             print(f"Error creating georeferenced TIFF: {e}")
+            return False
+    
+    def create_georeferenced_jp2(self, input_tiff: str, gcps: list, output_path: str, 
+                                 epsg: int = 4326) -> bool:
+        """
+        Create a georeferenced JPEG2000 file using Ground Control Points.
+        
+        Args:
+            input_tiff: Path to input TIFF file
+            gcps: List of GCPs as (pixel_x, pixel_y, lon, lat) tuples
+            output_path: Path for output JP2 file
+            epsg: EPSG code for coordinate system (default 4326 = WGS84)
+            
+        Returns:
+            True on success, False on error
+        """
+        try:
+            # First create georeferenced GeoTIFF
+            temp_geotiff = tempfile.NamedTemporaryFile(suffix='_gcp.tif', delete=False)
+            temp_geotiff_path = temp_geotiff.name
+            temp_geotiff.close()
+            self.temp_files.append(temp_geotiff_path)
+            
+            # Add GCPs to TIFF
+            if not self.create_georeferenced_tiff(input_tiff, gcps, temp_geotiff_path, epsg):
+                return False
+            
+            # Convert georeferenced TIFF to JPEG2000
+            try:
+                ds = gdal.Open(temp_geotiff_path, gdal.GA_ReadOnly)
+                if ds is None:
+                    print(f"Could not open georeferenced TIFF")
+                    return False
+                
+                # Find JPEG2000 driver
+                driver = gdal.GetDriverByName('JP2OpenJPEG')
+                if driver is None:
+                    for driver_name in ['JP2KAK', 'JP2ECW', 'JPEG2000']:
+                        driver = gdal.GetDriverByName(driver_name)
+                        if driver:
+                            break
+                
+                if driver is None:
+                    print("No JPEG2000 driver available")
+                    return False
+                
+                # JPEG2000 creation options
+                options = [
+                    'QUALITY=100',
+                    'REVERSIBLE=YES',
+                    'YCBCR420=NO',
+                    'GMLJP2=YES',      # Include GML for georeferencing
+                    'GeoJP2=YES'       # Include GeoJP2 UUID box
+                ]
+                
+                print(f"Creating georeferenced JPEG2000 with {len(gcps)} GCPs...")
+                out_ds = driver.CreateCopy(output_path, ds, strict=0, options=options)
+                
+                if out_ds:
+                    out_ds.FlushCache()
+                    out_ds = None
+                    ds = None
+                    print(f"Created georeferenced JPEG2000: {output_path}")
+                    return True
+                else:
+                    ds = None
+                    return False
+                    
+            except Exception as e:
+                print(f"Error creating JPEG2000: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"Error creating georeferenced JPEG2000: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def warp_with_gcps(self, input_geotiff: str, output_path: str, 
@@ -1088,6 +1363,10 @@ class HEIFProcessor:
             
             # Step 2: Add GCPs to create georeferenced TIFF
             print(f"Step 2: Adding {len(gcps)} GCPs to TIFF...")
+            
+            # Determine output format
+            is_jp2_export = self.export_format == 'JP2' and output_path.endswith('.jp2')
+            
             if warp or orthorectify:
                 # Create intermediate file with GCPs
                 temp_geo = tempfile.NamedTemporaryFile(suffix='_gcps.tif', delete=False)
@@ -1095,23 +1374,66 @@ class HEIFProcessor:
                 temp_geo.close()
                 self.temp_files.append(temp_geo_path)
                 
-                if not self.create_georeferenced_tiff(tiff_path, gcps, temp_geo_path):
-                    return False, provenance
+                if is_jp2_export:
+                    # For JP2 export, create georeferenced GeoTIFF first
+                    if not self.create_georeferenced_tiff(tiff_path, gcps, temp_geo_path):
+                        return False, provenance
+                else:
+                    if not self.create_georeferenced_tiff(tiff_path, gcps, temp_geo_path):
+                        return False, provenance
                 
                 # Step 3: Apply transformation
                 if orthorectify:
                     print(f"Step 3: Orthorectifying with {transform_order} order transformation...")
-                    if not self.orthorectify_with_gcps(temp_geo_path, output_path, 
-                                                       transform_order, resample_method):
-                        return False, provenance
+                    
+                    if is_jp2_export:
+                        # Create intermediate orthorectified TIFF
+                        temp_ortho = tempfile.NamedTemporaryFile(suffix='_ortho.tif', delete=False)
+                        temp_ortho_path = temp_ortho.name
+                        temp_ortho.close()
+                        self.temp_files.append(temp_ortho_path)
+                        
+                        if not self.orthorectify_with_gcps(temp_geo_path, temp_ortho_path, 
+                                                           transform_order, resample_method):
+                            return False, provenance
+                        
+                        # Convert orthorectified TIFF to JPEG2000
+                        print("Step 4: Converting to JPEG2000...")
+                        if not self.convert_tiff_to_jp2(temp_ortho_path, output_path):
+                            return False, provenance
+                    else:
+                        if not self.orthorectify_with_gcps(temp_geo_path, output_path, 
+                                                           transform_order, resample_method):
+                            return False, provenance
                 else:
-                    print("Step 3: Warping to final GeoTIFF...")
-                    if not self.warp_with_gcps(temp_geo_path, output_path, resample_method):
-                        return False, provenance
+                    print("Step 3: Warping to final output...")
+                    
+                    if is_jp2_export:
+                        # Create intermediate warped TIFF
+                        temp_warp = tempfile.NamedTemporaryFile(suffix='_warp.tif', delete=False)
+                        temp_warp_path = temp_warp.name
+                        temp_warp.close()
+                        self.temp_files.append(temp_warp_path)
+                        
+                        if not self.warp_with_gcps(temp_geo_path, temp_warp_path, resample_method):
+                            return False, provenance
+                        
+                        # Convert warped TIFF to JPEG2000
+                        print("Step 4: Converting to JPEG2000...")
+                        if not self.convert_tiff_to_jp2(temp_warp_path, output_path):
+                            return False, provenance
+                    else:
+                        if not self.warp_with_gcps(temp_geo_path, output_path, resample_method):
+                            return False, provenance
             else:
                 # Direct output without warping/orthorectification
-                if not self.create_georeferenced_tiff(tiff_path, gcps, output_path):
-                    return False, provenance
+                if is_jp2_export:
+                    # Create georeferenced JPEG2000
+                    if not self.create_georeferenced_jp2(tiff_path, gcps, output_path):
+                        return False, provenance
+                else:
+                    if not self.create_georeferenced_tiff(tiff_path, gcps, output_path):
+                        return False, provenance
             
             # Calculate BLAKE3 hash of output GeoTIFF
             output_hash, output_hash_algo = self.calculate_file_hash(output_path)
@@ -1122,7 +1444,8 @@ class HEIFProcessor:
             print(f"Output hash ({output_hash_algo}): {output_hash}")
             
             # Save provenance metadata as sidecar JSON
-            provenance_file = output_path.replace('.tif', '_provenance.json')
+            file_ext = '.jp2' if output_path.endswith('.jp2') else '.tif'
+            provenance_file = output_path.replace(file_ext, '_provenance.json')
             with open(provenance_file, 'w', encoding='utf-8') as f:
                 json.dump(provenance, f, indent=2)
             

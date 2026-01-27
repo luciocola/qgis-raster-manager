@@ -10,6 +10,7 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 - **TTL Metadata Parsing**: Extract Ground Control Points from external RDF/TTL metadata files or internal RDF
 - **Automatic Georeferencing**: Use image-to-ground coordinate correspondences to georeference imagery
 - **GeoTIFF Output**: Convert and export as georeferenced GeoTIFF files
+- **JPEG2000 Output**: Optional export as JPEG2000 (.jp2) with better compression and native QGIS support
 - **Image Warping**: Optional warping for proper display in geographic coordinates
 - **Orthorectification**: Advanced polynomial transformation options (1st-3rd order, TPS)
 - **BLAKE3 Hashing**: Cryptographic signatures for data integrity and interoperability
@@ -168,7 +169,8 @@ EMBEDDED RDF METADATA:
    - The plugin will auto-suggest the TTL file if it's in the same directory
 
 3. **Configure Options**:
-   - **Output Directory**: Where to save the georeferenced GeoTIFF
+   - **Output Directory**: Where to save the georeferenced output
+   - **Output Format**: Choose between GeoTIFF (.tif) or JPEG2000 (.jp2)
    - **Warp Image**: Enable for proper display (recommended)
    - **Resampling Method**: Choose quality vs. speed tradeoff
      - Cubic: Best quality (default)
@@ -353,6 +355,35 @@ Features enabled with heif-enc:
 - Advanced compression options
 - Tiling mode selection
 - SAI metadata injection
+
+### JPEG2000 Export
+
+The plugin supports exporting georeferenced imagery as JPEG2000 format:
+
+**Advantages of JPEG2000:**
+- **Better Compression**: 20-30% smaller than GeoTIFF at same quality
+- **Native QGIS Support**: GDAL has built-in JPEG2000 drivers
+- **Lossless Mode**: Reversible compression preserves all data
+- **Multi-resolution**: Built-in pyramids for efficient zoom
+- **Large Images**: Handles very large imagery efficiently
+- **Georeferencing**: Supports GML and GeoJP2 UUID boxes
+
+**How to Use:**
+1. Open the HEIF/TTL Importer dialog
+2. Check "Export as JPEG2000 (.jp2) instead of GeoTIFF"
+3. Process your HEIF imagery as normal
+4. Output will be georeferenced JPEG2000 file
+
+**Requirements:**
+- GDAL with JPEG2000 driver (JP2OpenJPEG, JP2KAK, or JP2ECW)
+- Included in standard QGIS installation
+
+**When to Use JPEG2000:**
+- Large imagery archives (satellites, aerial photos)
+- Web service delivery (WMS/WCS)
+- Long-term preservation
+- When file size matters
+- Scientific data requiring lossless compression
 
 ## Troubleshooting
 
