@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>HEIFTTLImporterDialog</class>
+ <widget class="QDialog" name="HEIFTTLImporterDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>700</width>
+    <height>700</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>HEIF/TTL Imagery Importer</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupBoxFiles">
+     <property name="title">
+      <string>Input Files</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelHEIF">
+        <property name="text">
+         <string>HEIF Image:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="txtHEIFPath"/>
+      </item>
+      <item row="0" column="2">
+       <widget class="QPushButton" name="btnBrowseHEIF">
+        <property name="text">
+         <string>Browse...</string>
+        </property>
+        <property name="maximumWidth">
+         <number>100</number>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="3">
+       <widget class="QPushButton" name="btnShowStructure">
+        <property name="text">
+         <string>Show Structure</string>
+        </property>
+        <property name="maximumWidth">
+         <number>120</number>
+        </property>
+        <property name="toolTip">
+         <string>Display complete HEIF/HEVC file structure including metadata, images, and thumbnails</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelTTL">
+        <property name="text">
+         <string>TTL Metadata:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="txtTTLPath"/>
+      </item>
+      <item row="1" column="2">
+       <widget class="QPushButton" name="btnBrowseTTL">
+        <property name="text">
+         <string>Browse...</string>
+        </property>
+        <property name="maximumWidth">
+         <number>100</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxOptions">
+     <property name="title">
+      <string>Import Options</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_2">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout">
+        <item>
+         <widget class="QLabel" name="labelOutput">
+          <property name="text">
+           <string>Output Directory:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="txtOutputPath"/>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnBrowseOutput">
+          <property name="text">
+           <string>Browse...</string>
+          </property>
+          <property name="maximumWidth">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkWarp">
+        <property name="text">
+         <string>Warp image for proper display (recommended)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkOrthorectify">
+        <property name="text">
+         <string>Orthorectify using GCPs (advanced geometric correction)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+        <property name="toolTip">
+         <string>Apply polynomial transformation using Ground Control Points for precise geometric correction. Recommended for aerial/satellite imagery.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_3">
+        <item>
+         <widget class="QLabel" name="labelTransform">
+          <property name="text">
+           <string>Transformation Order:</string>
+          </property>
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="cmbTransformOrder">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="toolTip">
+           <string>Polynomial order for orthorectification. Higher orders fit complex distortions but require more GCPs.</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>1st Order (3+ GCPs, affine)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>2nd Order (6+ GCPs)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>3rd Order (10+ GCPs)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>TPS (Thin Plate Spline)</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
+        <item>
+         <widget class="QLabel" name="labelResample">
+          <property name="text">
+           <string>Resampling Method:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="cmbResample">
+          <item>
+           <property name="text">
+            <string>Cubic (best quality)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Lanczos (high quality)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Bilinear</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Nearest Neighbor (fastest)</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkAddToMap">
+        <property name="text">
+         <string>Add result to map canvas</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkGenerateRDF">
+        <property name="text">
+         <string>Generate RDF/TTL provenance file</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>Create an RDF Turtle file with processing provenance metadata (W3C PROV-O format)</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxMetadata">
+     <property name="title">
+      <string>Metadata Preview</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <widget class="QTextEdit" name="txtMetadataPreview">
+        <property name="readOnly">
+         <bool>true</bool>
+        </property>
+        <property name="minimumHeight">
+         <number>200</number>
+        </property>
+        <property name="maximumHeight">
+         <number>300</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QProgressBar" name="progressBar">
+     <property name="value">
+      <number>0</number>
+     </property>
+     <property name="textVisible">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayoutButtons">
+     <item>
+      <widget class="QPushButton" name="btnCreatePackage">
+       <property name="text">
+        <string>📦 Create Package (ZIP)</string>
+       </property>
+       <property name="minimumWidth">
+        <number>160</number>
+       </property>
+       <property name="toolTip">
+        <string>Create a ZIP archive with exported GeoTIFF, JSON provenance, and RDF/TTL metadata</string>
+       </property>
+       <property name="enabled">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnImport">
+       <property name="text">
+        <string>Start Import</string>
+       </property>
+       <property name="minimumWidth">
+        <number>120</number>
+       </property>
+       <property name="toolTip">
+        <string>Start the HEIF/TTL import process</string>
+       </property>
+       <property name="default">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>Close</string>
+       </property>
+       <property name="minimumWidth">
+        <number>100</number>
+       </property>
+       <property name="toolTip">
+        <string>Close the dialog</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
