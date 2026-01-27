@@ -4,7 +4,7 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 
 ## Features
 
-- **HEIF Image Support**: Import modern HEIF/HEIC image files
+- **HEIF Image Support**: Import modern HEIF/HEIC image files with full ISO/IEC 23008-12 compliance
 - **HEIF Structure Analysis**: Display complete file structure including boxes, metadata, images, thumbnails, and embedded data
 - **Internal RDF Support**: Process HEIF files with embedded RDF metadata (TB21 GIMI format)
 - **TTL Metadata Parsing**: Extract Ground Control Points from external RDF/TTL metadata files or internal RDF
@@ -15,6 +15,10 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 - **BLAKE3 Hashing**: Cryptographic signatures for data integrity and interoperability
 - **Provenance Tracking**: Full lineage metadata with UUIDs and processing history
 - **Multiple Tiles**: Support for tiled imagery with separate GCP sets
+- **Advanced Tiling Support**: Automatic detection of grid, tili, and unci tiling modes (see [libheif tiling modes](https://github.com/strukturag/libheif/wiki/heif%E2%80%90enc-Command-Line-Tool#tiling-modes))
+- **Uncompressed Format**: Support for ISO 23001-17 uncompressed codec including signed integer data ([PR #1644](https://github.com/strukturag/libheif/pull/1644))
+- **SAI Metadata**: Extract Sample Auxiliary Information including GIMI content IDs and TAI timestamps
+- **heif-enc Integration**: Optional integration with heif-enc command-line tool for advanced encoding features
 
 ## Installation
 
@@ -25,6 +29,24 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
    ```bash
    pip install pillow pillow-heif gdal blake3
    ```
+
+3. **Optional: libheif command-line tools** (for advanced features):
+   - Download from: https://github.com/strukturag/libheif
+   - Build instructions:
+     ```bash
+     git clone https://github.com/strukturag/libheif.git
+     cd libheif
+     mkdir build && cd build
+     cmake .. -DCMAKE_BUILD_TYPE=Release
+     make
+     sudo make install
+     ```
+   - Provides `heif-enc` and `heif-convert` tools for:
+     - Advanced tiling modes (grid, tili, unci)
+     - Uncompressed codec with signed integer support
+     - SAI metadata for GIMI content IDs and timestamps
+     - Multi-resolution pyramids
+     - Image sequences with metadata tracks
 
 **Note**: BLAKE3 is used for cryptographic hashing to ensure data integrity and interoperability with other defense and emergency response systems. The plugin generates BLAKE3 hashes (with multihash format) for both input and output files, providing verifiable file fingerprints for secure data exchange and provenance tracking.
 
@@ -267,6 +289,70 @@ Example provenance output:
 - **Input**: HEIF image in pixel coordinates
 - **GCPs**: Geographic coordinates (WGS84, EPSG:4326)
 - **Output**: GeoTIFF in WGS84 projection
+
+## Advanced Features
+
+### Tiled Image Support
+
+The plugin automatically detects and handles three tiling modes defined in the HEIF specification:
+
+1. **Grid Mode** (default):
+   - Best decoder compatibility
+   - Maximum 65,535 tiles
+   - Uses `grid` item reference
+   - Supported by all HEIF decoders
+
+2. **Tili Mode** (libheif-specific):
+   - Efficient tiling with minimal overhead
+   - Practically unlimited tiles
+   - Requires libheif decoder
+   - Optimized for very large images
+
+3. **Unci Mode** (ISO 23001-17):
+   - Uses uncompressed codec internal tiling
+   - Part of ISO 23001-17 standard
+   - Supports signed integer data ([PR #1644](https://github.com/strukturag/libheif/pull/1644))
+   - Low overhead, large image support
+
+The plugin automatically detects the tiling mode when analyzing HEIF structure and adjusts processing accordingly.
+
+### SAI Metadata (GIMI Support)
+
+Sample Auxiliary Information (SAI) provides frame-level metadata for:
+
+- **Content IDs**: UUID-based GIMI content identifiers
+- **TAI Timestamps**: ISO 23001-17 TAI (International Atomic Time) timestamps
+- **Synchronization State**: Frame timing and sync flags
+
+SAI data is automatically extracted when present in HEIF files and included in provenance metadata.
+
+### Uncompressed Format with Signed Integers
+
+The plugin supports the ISO 23001-17 uncompressed codec including the latest signed integer enumeration ([PR #1644](https://github.com/strukturag/libheif/pull/1644)). This enables:
+
+- Lossless imagery with precise numeric values
+- Signed integer data for elevation/bathymetry
+- Optional compression (deflate, zlib, brotli)
+- High-precision scientific data preservation
+
+### heif-enc Integration
+
+When `heif-enc` command-line tool is available, the plugin can leverage advanced encoding features:
+
+```bash
+# Check if heif-enc is available
+which heif-enc
+
+# Or use custom build location
+export HEIF_ENC_PATH=~/Downloads/libheif/build/examples/heif-enc
+```
+
+Features enabled with heif-enc:
+- Multi-resolution pyramid encoding
+- Image sequence encoding with metadata tracks
+- Advanced compression options
+- Tiling mode selection
+- SAI metadata injection
 
 ## Troubleshooting
 

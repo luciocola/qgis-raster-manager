@@ -38,10 +38,92 @@ class HEIFProcessor:
         self.internal_rdf = None
         self.internal_rdf_format = None
         self.heif_convert_cmd = None  # Will be set by check_heif_convert_available()
+        self.heif_enc_cmd = None  # heif-enc for encoding
+        self.tiling_mode = None  # 'grid', 'tili', or 'unci'
+        self.supports_signed_int = False  # ISO/IEC 23001-17 signed integers (PR #1644)
+        self.supports_sai = False  # Sample Auxiliary Information for GIMI
         
     def is_heif_supported(self) -> bool:
         """Check if HEIF format is supported"""
         return HEIF_AVAILABLE
+    
+    def check_heif_enc_available(self) -> bool:
+        """
+        Check if heif-enc command-line tool is available.
+        
+        heif-enc provides advanced encoding features:
+        - Tiled image encoding (grid, tili, unci modes)
+        - Uncompressed codec with signed integer support
+        - SAI (Sample Auxiliary Information) for GIMI content IDs
+        - Multi-resolution pyramids
+        - Image sequences with metadata tracks
+        
+        See: https://github.com/strukturag/libheif/wiki/heif%E2%80%90enc-Command-Line-Tool
+        
+        Returns:
+            True if heif-enc is available, False otherwise
+        """
+        import subprocess
+        
+        for cmd in ['heif-enc', '/usr/local/bin/heif-enc', os.path.expanduser('~/Downloads/libheif/build/examples/heif-enc')]:
+            try:
+                result = subprocess.run([cmd, '--version'], 
+                                      capture_output=True, 
+                                      text=True, 
+                                      timeout=5)
+                if result.returncode == 0 or 'heif-enc' in result.stdout or 'heif-enc' in result.stderr:
+                    self.heif_enc_cmd = cmd
+                    print(f"Found heif-enc at: {cmd}")
+                    
+                    # Check for advanced features in help output
+                    help_result = subprocess.run([cmd, '--help'], 
+                                                capture_output=True, 
+                                                text=True, 
+                                                timeout=5)
+                    help_text = help_result.stdout + help_result.stderr
+                    
+                    # Check for tiling support
+                    if '--tiled-input' in help_text:
+                        print("  ✓ Tiled image encoding supported")
+                    if '--unci' in help_text or '--uncompressed' in help_text:
+                        print("  ✓ Uncompressed codec supported")
+                        self.supports_signed_int = True  # PR #1644 feature
+                    if '--sai-data-file' in help_text:
+                        print("  ✓ SAI metadata supported (GIMI content IDs)")
+                        self.supports_sai = True
+                    
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                continue
+        
+        print("heif-enc not found. Advanced encoding features unavailable.")
+        print("Install libheif and build with: cmake .. && make")
+        print("See: https://github.com/strukturag/libheif")
+        return False
+    
+    def check_heif_convert_available(self) -> bool:
+        """
+        Check if heif-convert command-line tool is available.
+        
+        Returns:
+            True if heif-convert is available, False otherwise
+        """
+        import subprocess
+        
+        for cmd in ['heif-convert', '/usr/local/bin/heif-convert', os.path.expanduser('~/Downloads/libheif/build/examples/heif-convert')]:
+            try:
+                result = subprocess.run([cmd, '--version'], 
+                                      capture_output=True, 
+                                      text=True, 
+                                      timeout=5)
+                if result.returncode == 0 or 'heif-convert' in result.stdout or 'heif-convert' in result.stderr:
+                    self.heif_convert_cmd = cmd
+                    print(f"Found heif-convert at: {cmd}")
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                continue
+        
+        return False
     
     def calculate_file_hash(self, file_path: str) -> Tuple[str, str]:
         """
@@ -77,6 +159,47 @@ class HEIFProcessor:
         except Exception as e:
             print(f"Error calculating file hash: {e}")
             return "", "unknown"
+    
+    def detect_tiling_mode(self, heif_path: str) -> Optional[str]:
+        """
+        Detect the tiling mode used in a HEIF file.
+        
+        Tiling modes from libheif:
+        - 'grid': Default method with best decoder compatibility (max 65535 tiles)
+        - 'tili': Efficient tiling with little overhead (unlimited tiles, libheif only)
+        - 'unci': ISO 23001-17 uncompressed codec internal tiling
+        
+        See: https://github.com/strukturag/libheif/wiki/heif%E2%80%90enc-Command-Line-Tool#tiling-modes
+        
+        Args:
+            heif_path: Path to HEIF file
+            
+        Returns:
+            Tiling mode string ('grid', 'tili', 'unci') or None if not tiled
+        """
+        try:
+            with open(heif_path, 'rb') as f:
+                data = f.read(16384)  # Read first 16KB for box detection
+                
+                # Check for grid box (iref 'dimg' reference)
+                if b'grid' in data:
+                    self.tiling_mode = 'grid'
+                    return 'grid'
+                
+                # Check for tili box (libheif-specific)
+                if b'tili' in data:
+                    self.tiling_mode = 'tili'
+                    return 'tili'
+                
+                # Check for unci box (uncompressed codec)
+                if b'unci' in data:
+                    self.tiling_mode = 'unci'
+                    return 'unci'
+                
+                return None
+        except Exception as e:
+            print(f"Error detecting tiling mode: {e}")
+            return None
     
     def has_internal_rdf(self, heif_path: str) -> bool:
         """
