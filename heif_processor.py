@@ -29,6 +29,17 @@ except ImportError:
 
 from osgeo import gdal, osr
 
+# Import ISO 19115-4 metadata extractor
+try:
+    from .iso19115_4_metadata import ISO19115_4MetadataExtractor
+    ISO19115_4_AVAILABLE = True
+except ImportError:
+    try:
+        from iso19115_4_metadata import ISO19115_4MetadataExtractor
+        ISO19115_4_AVAILABLE = True
+    except ImportError:
+        ISO19115_4_AVAILABLE = False
+
 
 class HEIFProcessor:
     """Processes HEIF images and converts them to GeoTIFF with GCPs"""
@@ -1442,6 +1453,31 @@ class HEIFProcessor:
             
             print(f"Input hash ({input_hash_algo}): {input_hash}")
             print(f"Output hash ({output_hash_algo}): {output_hash}")
+            
+            # Extract and add ISO 19115-4 imagery metadata
+            if ISO19115_4_AVAILABLE:
+                try:
+                    print("Extracting ISO 19115-4 imagery metadata...")
+                    extractor = ISO19115_4MetadataExtractor()
+                    
+                    # Open HEIF file to get image object
+                    image_obj = None
+                    try:
+                        image_obj = Image.open(heif_path)
+                    except:
+                        pass
+                    
+                    # Extract metadata
+                    iso_metadata = extractor.extract_from_heif(heif_path, image_obj)
+                    
+                    # Enrich provenance with ISO 19115-4 metadata
+                    provenance = extractor.enrich_provenance(provenance, iso_metadata)
+                    
+                    print("✓ ISO 19115-4 metadata added to provenance")
+                except Exception as e:
+                    print(f"Warning: Could not extract ISO 19115-4 metadata: {e}")
+            else:
+                print("ISO 19115-4 metadata extractor not available")
             
             # Save provenance metadata as sidecar JSON
             file_ext = '.jp2' if output_path.endswith('.jp2') else '.tif'

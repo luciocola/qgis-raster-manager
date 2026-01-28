@@ -28,6 +28,7 @@ cp -v heif_ttl_dialog.py "$TARGET_DIR/"
 cp -v heif_ttl_dialog_base.ui "$TARGET_DIR/"
 cp -v ttl_parser.py "$TARGET_DIR/"
 cp -v heif_processor.py "$TARGET_DIR/"
+cp -v iso19115_4_metadata.py "$TARGET_DIR/"
 cp -v metadata.txt "$TARGET_DIR/"
 cp -v README.md "$TARGET_DIR/"
 

@@ -1,6 +1,6 @@
 # HEIF/TTL Imagery Importer for QGIS
 
-A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files and uses TTL (Turtle RDF) metadata to automatically georeference them using Ground Control Points (GCPs).
+A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files and uses TTL (Turtle RDF) metadata to automatically georeference them using Ground Control Points (GCPs). Includes full **ISO 19115-4 imagery metadata** extraction and quality reporting.
 
 ## Features
 
@@ -13,8 +13,16 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 - **JPEG2000 Output**: Optional export as JPEG2000 (.jp2) with better compression and native QGIS support
 - **Image Warping**: Optional warping for proper display in geographic coordinates
 - **Orthorectification**: Advanced polynomial transformation options (1st-3rd order, TPS)
+- **ISO 19115-4 Metadata**: Automatic extraction of imagery-specific metadata quality elements
+  - Radiometric accuracy
+  - Sensor quality assessment
+  - Cloud coverage reporting
+  - Processing level documentation
+  - Usability assessment for geospatial applications
+  - Gridded data spatial representation
+  - Acquisition information (platform, sensor, datetime)
 - **BLAKE3 Hashing**: Cryptographic signatures for data integrity and interoperability
-- **Provenance Tracking**: Full lineage metadata with UUIDs and processing history
+- **Provenance Tracking**: Full lineage metadata with UUIDs, processing history, and ISO 19115-4 quality reports
 - **Multiple Tiles**: Support for tiled imagery with separate GCP sets
 - **Advanced Tiling Support**: Automatic detection of grid, tili, and unci tiling modes (see [libheif tiling modes](https://github.com/strukturag/libheif/wiki/heif%E2%80%90enc-Command-Line-Tool#tiling-modes))
 - **Uncompressed Format**: Support for ISO 23001-17 uncompressed codec including signed integer data ([PR #1644](https://github.com/strukturag/libheif/pull/1644))
@@ -385,6 +393,98 @@ The plugin supports exporting georeferenced imagery as JPEG2000 format:
 - When file size matters
 - Scientific data requiring lossless compression
 
+### ISO 19115-4 Imagery Metadata
+
+The plugin automatically extracts and generates **ISO 19115-4** compliant metadata for all imagery:
+
+**What is ISO 19115-4?**
+
+ISO 19115-4:2014 is the international standard for "Geographic information - Metadata - Part 4: Imagery and gridded data". It extends ISO 19115 with imagery-specific quality elements essential for remote sensing and geospatial imagery applications.
+
+**Metadata Elements Extracted:**
+
+1. **Radiometric Accuracy**: Quality of radiometric measurements
+2. **Sensor Quality**: Camera/sensor calibration status and health
+3. **Cloud Coverage**: Percentage of imagery obscured by clouds
+4. **Processing Level**: Level of radiometric and geometric correction (L0, L1A, L1B, L2A, etc.)
+5. **Usability Assessment**: Fitness for use in geospatial applications
+6. **Acquisition Information**: 
+   - Platform (camera make/model)
+   - Sensor/instrument details
+   - Acquisition datetime
+7. **Gridded Data Representation**:
+   - Image dimensions (rows/columns)
+   - Cell geometry
+   - Number of dimensions
+
+**Output Format:**
+
+ISO 19115-4 metadata is embedded in the provenance JSON file created alongside your georeferenced output:
+
+```json
+{
+  "original_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "derived_uuid": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+  "iso19115_4": {
+    "metadataStandard": "ISO 19115-4:2014",
+    "metadataIdentifier": "iso19115-4-my_image-20260128123045",
+    "quality": [
+      {
+        "type": "processingLevel",
+        "level": "L0",
+        "description": "HEIF imagery - unprocessed sensor data"
+      },
+      {
+        "type": "sensorQuality",
+        "sensorType": "Image Sensor (HEIF capable)",
+        "calibrationStatus": "unknown"
+      },
+      {
+        "type": "usabilityAssessment",
+        "usabilityScore": 0.9,
+        "intendedUse": "Geospatial imagery analysis with georeferencing"
+      }
+    ],
+    "acquisitionInformation": {
+      "platform": {
+        "identifier": "Apple iPhone 12 Pro",
+        "description": "Image acquisition platform"
+      },
+      "instrument": {
+        "identifier": "iPhone 12 Pro",
+        "type": "optical sensor"
+      }
+    },
+    "gridSpatialRepresentation": {
+      "numberOfDimensions": 2,
+      "axisDimensionProperties": [
+        {"dimensionName": "column", "dimensionSize": 4032},
+        {"dimensionName": "row", "dimensionSize": 3024}
+      ]
+    }
+  }
+}
+```
+
+**Benefits:**
+
+- **Standardized Metadata**: ISO-compliant metadata for interoperability with defense and emergency response systems
+- **Quality Assurance**: Documented quality metrics for decision making
+- **Lineage Tracking**: Complete provenance from sensor to georeferenced output
+- **STAC Integration**: Compatible with STAC (SpatioTemporal Asset Catalog) extensions
+- **International Compliance**: Meets NATO, UN, and international geospatial standards
+
+**Compatibility:**
+
+The ISO 19115-4 implementation is compatible with:
+- **ISO 19115-1:2014**: Core metadata standard
+- **ISO 19157-1:2023**: Data quality measures
+- **STAC Liability & Claims Extension**: For quality reporting
+- **NATO DGIWG**: Defence Geospatial Information Working Group standards
+- **OGC Standards**: OGC SensorThings API, OGC API - Features
+
+For more technical details, see [ISO 19115-4 vs ISO 19157-3 Compatibility](https://github.com/stac-extensions/liability-claims/blob/main/ISO19115-4-vs-ISO19157-3-COMPATIBILITY.md)
+
 ## Troubleshooting
 
 ### "HEIF support is not available"
@@ -441,6 +541,7 @@ heif_ttl_importer/
 ├── heif_ttl_dialog_base.ui       # Qt Designer UI file
 ├── ttl_parser.py                 # TTL/RDF parser
 ├── heif_processor.py             # HEIF to GeoTIFF converter
+├── iso19115_4_metadata.py        # ISO 19115-4 metadata extractor
 ├── show_heif_structure.py        # Standalone HEIF structure analyzer
 └── README.md                     # This file
 ```
@@ -449,6 +550,7 @@ heif_ttl_importer/
 
 - **TTLParser**: Parses RDF/TTL files to extract GCPs
 - **HEIFProcessor**: Handles HEIF conversion and georeferencing
+- **ISO19115_4MetadataExtractor**: Extracts ISO 19115-4 imagery metadata
 - **HEIFTTLImporterDialog**: User interface
 - **HEIFTTLImporter**: Main plugin integration with QGIS
 
