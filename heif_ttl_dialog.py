@@ -39,6 +39,20 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
         self.btnClose.clicked.connect(self.close_dialog)
         self.btnCreatePackage.clicked.connect(self.create_package)
         
+        # Connect Export buttons (if they exist in UI)
+        if hasattr(self, 'btnBrowseGeoTIFF'):
+            self.btnBrowseGeoTIFF.clicked.connect(self.browse_geotiff_export)
+        if hasattr(self, 'btnBrowseGeoTIFFSource'):
+            self.btnBrowseGeoTIFFSource.clicked.connect(self.browse_geotiff_for_source)
+        if hasattr(self, 'btnBrowseHEIFOutput'):
+            self.btnBrowseHEIFOutput.clicked.connect(self.browse_heif_output)
+        if hasattr(self, 'btnExportToHEIF'):
+            self.btnExportToHEIF.clicked.connect(self.export_to_tb21_heif)
+        if hasattr(self, 'comboGeoTIFFSource'):
+            self.comboGeoTIFFSource.currentIndexChanged.connect(self.on_geotiff_source_changed)
+        if hasattr(self, 'btnRefreshLayers'):
+            self.btnRefreshLayers.clicked.connect(self.refresh_raster_layers)
+        
         # Add button for displaying HEIF structure if it exists in UI
         if hasattr(self, 'btnShowStructure'):
             self.btnShowStructure.clicked.connect(self.show_heif_structure)
@@ -57,6 +71,86 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
         if not self.txtOutputPath.text():
             import tempfile
             self.txtOutputPath.setText(tempfile.gettempdir())
+        
+        # Populate raster layers for export - use QTimer to ensure QGIS is ready
+        QTimer.singleShot(100, self.refresh_raster_layers)
+        
+        # Check available codecs and disable unsupported ones
+        QTimer.singleShot(200, self.check_available_codecs)
+    
+    def check_available_codecs(self):
+        """Check which heif-enc codecs are available and disable unsupported ones in UI"""
+        if not hasattr(self, 'comboCompression'):
+            return
+        
+        try:
+            from .heif_processor import HEIFProcessor
+            if self.heif_processor is None:
+                self.heif_processor = HEIFProcessor()
+            
+            if not self.heif_processor.heif_enc_cmd:
+                return  # heif-enc not available
+            
+            import subprocess
+            result = subprocess.run(
+                [self.heif_processor.heif_enc_cmd, '--list-encoders'],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout
+                
+                # Parse available encoders
+                has_hevc = 'HEIC encoders:' in output and 'x265' in output
+                has_av1 = 'AVIF encoders:' in output and 'aom' in output
+                
+                # Check for JPEG2000 encoders (openjpeg or other)
+                j2k_section = output.split('JPEG 2000 encoders:')[1].split('\n')[1].strip() if 'JPEG 2000 encoders:' in output else ''
+                has_jpeg2000 = 'openjpeg' in j2k_section.lower() or len(j2k_section) > 0
+                
+                htj2k_section = output.split('JPEG 2000 (HT) encoders:')[1].split('\n')[1].strip() if 'JPEG 2000 (HT) encoders:' in output else ''
+                has_htj2k = len(htj2k_section) > 0
+                
+                has_uncompressed = 'Uncompressed encoders:' in output
+                
+                # Check if OpenJPEG is available on system (for helpful message)
+                try:
+                    openjpeg_check = subprocess.run(['which', 'opj_compress'], capture_output=True, text=True, timeout=2)
+                    openjpeg_available = openjpeg_check.returncode == 0
+                except:
+                    openjpeg_available = False
+                
+                # Disable unavailable codecs
+                for i in range(self.comboCompression.count()):
+                    codec = self.comboCompression.itemText(i)
+                    available = True
+                    
+                    if codec == 'hevc' and not has_hevc:
+                        available = False
+                    elif codec == 'av1' and not has_av1:
+                        available = False
+                    elif codec == 'jpeg2000' and not has_jpeg2000:
+                        available = False
+                    elif codec == 'htj2k' and not has_htj2k:
+                        available = False
+                    elif codec == 'uncompressed' and not has_uncompressed:
+                        available = False
+                    
+                    # Disable/gray out unavailable options
+                    model = self.comboCompression.model()
+                    item = model.item(i)
+                    if not available:
+                        item.setEnabled(False)
+                        tooltip = f"{codec} encoder not available in this libheif build"
+                        
+                        # Add helpful message for JPEG2000 if OpenJPEG is installed
+                        if codec in ['jpeg2000', 'htj2k'] and openjpeg_available:
+                            tooltip += "\nOpenJPEG is installed - rebuild libheif with: cmake -DWITH_OpenJPEG=ON"
+                        
+                        item.setToolTip(tooltip)
+                    
+        except Exception as e:
+            print(f"Could not check codec availability: {e}")
     
     def check_heif_metadata(self):
         """Check if HEIF file has internal RDF metadata"""
@@ -613,13 +707,289 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
                 f'Files included: {len(files_to_zip)}\n\n'
                 f'Location: {zip_path}'
             )
-            
+        
         except Exception as e:
             QMessageBox.critical(
                 self,
                 'Package Error',
-                f'Failed to create package:\n\n{str(e)}'
+                f'Error creating package:\n{str(e)}'
             )
+    
+    def refresh_raster_layers(self):
+        """Refresh the list of loaded raster layers"""
+        if not hasattr(self, 'comboGeoTIFFSource'):
+            print("DEBUG: comboGeoTIFFSource not found in dialog")
+            return
+        
+        try:
+            from qgis.core import QgsProject, QgsRasterLayer
+            
+            print("DEBUG: Starting to refresh raster layers")
+            
+            # Store current selection
+            current_text = self.comboGeoTIFFSource.currentText()
+            
+            # Clear and repopulate
+            self.comboGeoTIFFSource.clear()
+            self.comboGeoTIFFSource.addItem('Browse for file...')
+            
+            # Add loaded raster layers
+            project = QgsProject.instance()
+            all_layers = project.mapLayers()
+            print(f"DEBUG: Total layers in project: {len(all_layers)}")
+            
+            raster_count = 0
+            for layer_id, layer in all_layers.items():
+                print(f"DEBUG: Checking layer: {layer.name()}, Type: {type(layer).__name__}, Valid: {layer.isValid()}")
+                if isinstance(layer, QgsRasterLayer) and layer.isValid():
+                    # Store layer ID in user data
+                    self.comboGeoTIFFSource.addItem(layer.name(), layer_id)
+                    raster_count += 1
+                    print(f"DEBUG: Added raster layer: {layer.name()}")
+            
+            print(f"DEBUG: Found {raster_count} raster layers")
+            
+            # Restore selection if possible
+            index = self.comboGeoTIFFSource.findText(current_text)
+            if index >= 0:
+                self.comboGeoTIFFSource.setCurrentIndex(index)
+            
+            # Update status
+            if raster_count > 0 and hasattr(self, 'txtGeoTIFFPath'):
+                self.txtGeoTIFFPath.setPlaceholderText(f'{raster_count} raster layer(s) available in project')
+            elif hasattr(self, 'txtGeoTIFFPath'):
+                self.txtGeoTIFFPath.setPlaceholderText('No raster layers loaded in QGIS project')
+        
+        except ImportError as e:
+            print(f"Error importing QGIS modules: {e}")
+            if hasattr(self, 'txtGeoTIFFPath'):
+                self.txtGeoTIFFPath.setPlaceholderText('QGIS not available - use Browse button')
+        except Exception as e:
+            print(f"Error refreshing raster layers: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def on_geotiff_source_changed(self, index):
+        """Handle GeoTIFF source selection change"""
+        if not hasattr(self, 'comboGeoTIFFSource'):
+            return
+        
+        try:
+            if index == 0:
+                # "Browse for file..." selected
+                self.txtGeoTIFFPath.setText('')
+                self.txtGeoTIFFPath.setReadOnly(False)
+                return
+            
+            from qgis.core import QgsProject
+            
+            # Get layer from stored ID
+            layer_id = self.comboGeoTIFFSource.currentData()
+            if layer_id:
+                project = QgsProject.instance()
+                layer = project.mapLayer(layer_id)
+                
+                if layer and layer.isValid():
+                    # Get the layer's source file path
+                    source_path = layer.source()
+                    
+                    # Handle provider-specific paths (e.g., GDAL virtual datasets)
+                    if '|' in source_path:
+                        source_path = source_path.split('|')[0]
+                    
+                    self.txtGeoTIFFPath.setText(source_path)
+                    self.txtGeoTIFFPath.setReadOnly(True)
+                    
+                    # Auto-suggest output path
+                    if os.path.exists(source_path):
+                        suggested_output = source_path.rsplit('.', 1)[0] + '_tb21.heif'
+                        if hasattr(self, 'txtHEIFOutputPath'):
+                            self.txtHEIFOutputPath.setText(suggested_output)
+                else:
+                    QMessageBox.warning(self, 'Layer Error', 
+                                      'Selected layer is no longer valid. Please refresh the layer list.')
+        
+        except Exception as e:
+            print(f"Error handling source change: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def browse_geotiff_for_source(self):
+        """Browse for GeoTIFF file when browse button clicked in source row"""
+        settings = QSettings()
+        last_dir = settings.value('heif_ttl_importer/last_geotiff_dir', os.path.expanduser('~'))
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Select GeoTIFF File',
+            last_dir,
+            'GeoTIFF Files (*.tif *.tiff);;All Files (*.*)'
+        )
+        
+        if file_path:
+            # Set combo box to "Browse for file..." mode
+            if hasattr(self, 'comboGeoTIFFSource'):
+                self.comboGeoTIFFSource.setCurrentIndex(0)
+            
+            # Update the file path text field
+            if hasattr(self, 'txtGeoTIFFPath'):
+                self.txtGeoTIFFPath.setText(file_path)
+                self.txtGeoTIFFPath.setReadOnly(False)
+            
+            settings.setValue('heif_ttl_importer/last_geotiff_dir', os.path.dirname(file_path))
+            
+            # Auto-suggest output path
+            suggested_output = file_path.rsplit('.', 1)[0] + '_tb21.heif'
+            if hasattr(self, 'txtHEIFOutputPath'):
+                self.txtHEIFOutputPath.setText(suggested_output)
+    
+    def browse_geotiff_export(self):
+        """Browse for GeoTIFF file to export to TB21 HEIF"""
+        settings = QSettings()
+        last_dir = settings.value('heif_ttl_importer/last_geotiff_dir', os.path.expanduser('~'))
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Select GeoTIFF to Export',
+            last_dir,
+            'GeoTIFF Files (*.tif *.tiff);;All Files (*.*)'
+        )
+        
+        if file_path:
+            # Set to "Browse for file..." mode
+            if hasattr(self, 'comboGeoTIFFSource'):
+                self.comboGeoTIFFSource.setCurrentIndex(0)
+            
+            self.txtGeoTIFFPath.setText(file_path)
+            self.txtGeoTIFFPath.setReadOnly(False)
+            settings.setValue('heif_ttl_importer/last_geotiff_dir', os.path.dirname(file_path))
+            
+            # Auto-suggest output path
+            suggested_output = file_path.rsplit('.', 1)[0] + '_tb21.heif'
+            if hasattr(self, 'txtHEIFOutputPath'):
+                self.txtHEIFOutputPath.setText(suggested_output)
+    
+    def browse_heif_output(self):
+        """Browse for output HEIF file location"""
+        settings = QSettings()
+        last_dir = settings.value('heif_ttl_importer/last_export_dir', os.path.expanduser('~'))
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            'Save TB21 HEIF As',
+            last_dir,
+            'HEIF Files (*.heif *.heic);;All Files (*.*)'
+        )
+        
+        if file_path:
+            if not file_path.lower().endswith(('.heif', '.heic')):
+                file_path += '.heif'
+            self.txtHEIFOutputPath.setText(file_path)
+            settings.setValue('heif_ttl_importer/last_export_dir', os.path.dirname(file_path))
+    
+    def export_to_tb21_heif(self):
+        """Export GeoTIFF to TB21 GIMI compliant HEIF"""
+        from .heif_processor import HEIFProcessor
+        
+        # Get paths
+        geotiff_path = self.txtGeoTIFFPath.text().strip()
+        heif_output = self.txtHEIFOutputPath.text().strip()
+        
+        if not geotiff_path or not os.path.exists(geotiff_path):
+            QMessageBox.warning(
+                self,
+                'Input Required',
+                'Please select a valid GeoTIFF file to export.'
+            )
+            return
+        
+        if not heif_output:
+            QMessageBox.warning(
+                self,
+                'Output Required',
+                'Please specify an output HEIF file path.'
+            )
+            return
+        
+        # Get export settings
+        quality = self.spinQuality.value() if hasattr(self, 'spinQuality') else 95
+        compression = self.comboCompression.currentText() if hasattr(self, 'comboCompression') else 'hevc'
+        embed_rdf = self.chkEmbedRDF.isChecked() if hasattr(self, 'chkEmbedRDF') else True
+        
+        # Disable export button during processing
+        if hasattr(self, 'btnExportToHEIF'):
+            self.btnExportToHEIF.setEnabled(False)
+            self.btnExportToHEIF.setText('Exporting...')
+        
+        try:
+            # Create processor and export
+            processor = HEIFProcessor()
+            
+            # Check if heif-enc is available for RDF embedding
+            if embed_rdf and not processor.check_heif_enc_available():
+                reply = QMessageBox.question(
+                    self,
+                    'heif-enc Not Available',
+                    'heif-enc command-line tool is not available. '
+                    'The HEIF will be created WITHOUT embedded RDF metadata.\n\n'
+                    'An external TTL file will be saved instead.\n\n'
+                    'Continue anyway?',
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+            
+            # Perform export
+            success, metadata = processor.export_geotiff_to_tb21_heif(
+                geotiff_path,
+                heif_output,
+                quality=quality,
+                compression=compression,
+                embed_rdf=embed_rdf
+            )
+            
+            if success:
+                msg_parts = [
+                    f'Successfully exported to TB21 GIMI HEIF:\n',
+                    f'Output: {heif_output}',
+                    f'GCPs: {metadata.get("gcp_count", "unknown")}',
+                    f'RDF Size: {metadata.get("rdf_size", 0)} bytes',
+                    f'Encoding: {metadata.get("encoding_method", "unknown")}'
+                ]
+                
+                if metadata.get("external_ttl"):
+                    msg_parts.append(f'\n⚠ External TTL: {os.path.basename(metadata["external_ttl"])}')
+                
+                if metadata.get("output_hash"):
+                    msg_parts.append(f'BLAKE3: {metadata["output_hash"][:16]}...')
+                
+                QMessageBox.information(
+                    self,
+                    'Export Successful',
+                    '\n'.join(msg_parts)
+                )
+            else:
+                error_msg = metadata.get('error', 'Unknown error')
+                QMessageBox.critical(
+                    self,
+                    'Export Failed',
+                    f'Failed to export TB21 HEIF:\n\n{error_msg}'
+                )
+        
+        except Exception as e:
+            import traceback
+            QMessageBox.critical(
+                self,
+                'Export Error',
+                f'An error occurred during export:\n\n{str(e)}\n\n{traceback.format_exc()}'
+            )
+        
+        finally:
+            # Re-enable export button
+            if hasattr(self, 'btnExportToHEIF'):
+                self.btnExportToHEIF.setEnabled(True)
+                self.btnExportToHEIF.setText('Export to TB21 HEIF')
             
     def process_complete(self, success=True):
         """Called when import process is complete"""

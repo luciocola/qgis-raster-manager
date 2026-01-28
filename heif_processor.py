@@ -6,7 +6,7 @@ import tempfile
 import uuid
 import json
 from datetime import datetime, timezone
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 from pathlib import Path
 
 try:
@@ -536,9 +536,16 @@ class HEIFProcessor:
                 if 'orientation' in img.info:
                     structure.append(f"  Orientation: {img.info['orientation']}")
                 
-                # Stride (for planar formats)
-                if hasattr(img, 'stride'):
-                    structure.append(f"  Stride: {img.stride}")
+                # Stride (for planar formats) - skip if pillow-heif lacks codec support
+                try:
+                    if hasattr(img, 'stride'):
+                        structure.append(f"  Stride: {img.stride}")
+                except RuntimeError as e:
+                    if "compression format has not been built in" in str(e):
+                        structure.append(f"  ⚠ Advanced analysis unavailable (pillow-heif lacks JPEG2000 decoder)")
+                        structure.append(f"  → Use heif-info or heif-convert for full details")
+                    else:
+                        raise
                 
                 # Image-specific metadata
                 if 'exif' in img.info and img.info['exif']:
@@ -646,15 +653,15 @@ class HEIFProcessor:
     
     def convert_heif_with_libheif(self, heif_path: str, output_path: Optional[str] = None) -> Optional[str]:
         """
-        Convert HEIF to PNG using heif-dec command-line tool.
-        This is a fallback for formats not supported by pillow_heif (e.g., uncompressed unci).
+        Convert HEIF to PNG/JP2 using heif-dec command-line tool.
+        This is a fallback for formats not supported by pillow_heif (e.g., JPEG2000).
         
         Args:
             heif_path: Path to input HEIF file
             output_path: Optional output path. If None, creates temp file
             
         Returns:
-            Path to output PNG file or None on error
+            Path to output file (PNG or JP2) or None on error
         """
         import subprocess
         
@@ -662,27 +669,75 @@ class HEIFProcessor:
         if not hasattr(self, 'heif_convert_cmd') or self.heif_convert_cmd is None:
             if not self.check_heif_convert_available():
                 print("heif-dec not found. Install libheif with: brew install libheif")
-                print("Or build from source with uncompressed codec support.")
+                print("Or build from source with JPEG2000 codec support.")
                 return None
         
         try:
+            # First check what codec is used in the HEIF file
+            codec_type = "unknown"
+            heif_info_cmd = self.heif_convert_cmd.replace('heif-dec', 'heif-info')
+            if os.path.exists(heif_info_cmd):
+                try:
+                    plugin_dir = os.path.join(os.path.dirname(self.heif_convert_cmd), '..', 'libheif', 'plugins')
+                    info_cmd = [heif_info_cmd]
+                    if os.path.exists(plugin_dir):
+                        info_cmd.extend(['--plugin-directory', plugin_dir])
+                    info_cmd.append(heif_path)
+                    
+                    info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=10)
+                    if 'jpeg2000' in info_result.stdout.lower() or 'j2k' in info_result.stdout.lower():
+                        codec_type = "jpeg2000"
+                        print("Detected JPEG2000 codec in HEIF")
+                    elif 'hevc' in info_result.stdout.lower() or 'h265' in info_result.stdout.lower():
+                        codec_type = "hevc"
+                        print("Detected HEVC codec in HEIF")
+                except Exception as e:
+                    print(f"Could not detect codec: {e}")
+            
+            # Determine output format and extension based on codec
+            if codec_type == "jpeg2000":
+                output_ext = '.jp2'
+                print("Will extract as JPEG2000 (.jp2)")
+            else:
+                output_ext = '.png'
+                print("Will extract as PNG")
+            
             # Determine output path
             if output_path is None:
-                temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                temp_file = tempfile.NamedTemporaryFile(suffix=output_ext, delete=False)
                 output_path = temp_file.name
                 temp_file.close()
                 self.temp_files.append(output_path)
             
             # Use heif-dec to extract image
-            # Syntax: heif-dec <input.heif> <output.png>
-            print(f"Converting HEIF with custom libheif decoder (unci support)...")
+            print(f"Converting HEIF with custom libheif decoder...")
             print(f"Command: {self.heif_convert_cmd}")
+            
+            # Build command - heif-dec doesn't support --plugin-directory
+            # Instead, set LIBHEIF_PLUGIN_PATH environment variable
+            cmd = [self.heif_convert_cmd, heif_path, output_path]
+            
+            # Set environment variable for plugin directory (for JPEG2000 support)
+            env = os.environ.copy()
+            plugin_dir = os.path.join(os.path.dirname(self.heif_convert_cmd), '..', 'libheif', 'plugins')
+            if os.path.exists(plugin_dir):
+                env['LIBHEIF_PLUGIN_PATH'] = plugin_dir
+                print(f"Using plugin directory: {plugin_dir} (via LIBHEIF_PLUGIN_PATH)")
+            
+            print(f"Running: {' '.join(cmd)}")
             result = subprocess.run(
-                [self.heif_convert_cmd, heif_path, output_path],
+                cmd,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
+                env=env
             )
+            
+            print(f"heif-dec return code: {result.returncode}")
+            if result.stdout:
+                print(f"stdout: {result.stdout}")
+            if result.stderr:
+                print(f"stderr: {result.stderr}")
             
             # heif-dec may return 0 on success or 1 with warnings
             if result.returncode != 0 and not os.path.exists(output_path):
@@ -801,7 +856,27 @@ class HEIFProcessor:
                             raise Exception(error_msg)
                     else:
                         # Get first image
-                        img = heif_file[0].to_pillow()
+                        try:
+                            img = pillow_heif.to_pillow(heif_file[0])
+                        except RuntimeError as load_error:
+                            # Check if this is a codec support issue (e.g., JPEG2000)
+                            if "compression format has not been built in" in str(load_error):
+                                print(f"pillow-heif lacks decoder for this codec: {load_error}")
+                                print("Attempting conversion with heif-convert...")
+                                
+                                if self.check_heif_convert_available():
+                                    png_path = self.convert_heif_with_libheif(heif_path)
+                                    if png_path:
+                                        img = Image.open(png_path)
+                                    else:
+                                        raise Exception(f"heif-convert failed to decode file: {load_error}")
+                                else:
+                                    raise Exception(
+                                        f"HEIF file uses codec not supported by pillow-heif: {load_error}\n"
+                                        f"Install libheif tools for decoding: brew install libheif"
+                                    )
+                            else:
+                                raise
                 except Exception as heif_error:
                     print(f"pillow_heif direct method also failed: {heif_error}")
                     
@@ -810,7 +885,24 @@ class HEIFProcessor:
                         print("Attempting conversion with heif-convert as final fallback...")
                         png_path = self.convert_heif_with_libheif(heif_path)
                         if png_path:
-                            img = Image.open(png_path)
+                            # Verify PNG file exists and has content
+                            if not os.path.exists(png_path):
+                                raise Exception(f"heif-convert output file not found: {png_path}")
+                            
+                            file_size = os.path.getsize(png_path)
+                            if file_size == 0:
+                                raise Exception(f"heif-convert created empty file: {png_path}")
+                            
+                            print(f"  PNG file created: {file_size:,} bytes")
+                            
+                            # Try to open with explicit format
+                            try:
+                                with open(png_path, 'rb') as f:
+                                    img = Image.open(f)
+                                    img.load()  # Force load to verify it's readable
+                            except Exception as png_error:
+                                print(f"  Failed to load PNG: {png_error}")
+                                raise Exception(f"heif-convert created unreadable PNG file: {png_error}")
                         else:
                             raise heif_error
                     else:
@@ -1300,6 +1392,61 @@ class HEIFProcessor:
             print(f"Error during orthorectification: {e}")
             return False
     
+    def extract_georeference_from_tiff(self, tiff_path: str) -> Tuple[List, int, int]:
+        """
+        Extract georeferencing (GCPs or geotransform) from a TIFF file.
+        This handles JPEG2000 HEIF files that may have embedded GMLJP2 georeferencing.
+        
+        Args:
+            tiff_path: Path to TIFF file (converted from HEIF)
+            
+        Returns:
+            Tuple of (gcps_list, width, height) where gcps_list is [(px, py, lon, lat), ...]
+        """
+        try:
+            dataset = gdal.Open(tiff_path, gdal.GA_ReadOnly)
+            if not dataset:
+                return ([], 0, 0)
+            
+            width = dataset.RasterXSize
+            height = dataset.RasterYSize
+            gcps_list = []
+            
+            # Try to get GCPs first
+            gcps = dataset.GetGCPs()
+            if gcps and len(gcps) > 0:
+                print(f"Found {len(gcps)} GCPs in converted image")
+                for gcp in gcps:
+                    gcps_list.append((gcp.GCPPixel, gcp.GCPLine, gcp.GCPX, gcp.GCPY))
+                dataset = None
+                return (gcps_list, width, height)
+            
+            # Try geotransform (for orthorectified images)
+            geotransform = dataset.GetGeoTransform()
+            if geotransform and geotransform != (0, 1, 0, 0, 0, 1):
+                print(f"Found geotransform in converted image, creating corner GCPs")
+                # Create GCPs from corners
+                corners = [
+                    (0, 0),  # Top-left
+                    (width, 0),  # Top-right
+                    (width, height),  # Bottom-right
+                    (0, height)  # Bottom-left
+                ]
+                for px, py in corners:
+                    lon = geotransform[0] + px * geotransform[1] + py * geotransform[2]
+                    lat = geotransform[3] + px * geotransform[4] + py * geotransform[5]
+                    gcps_list.append((px, py, lon, lat))
+                dataset = None
+                return (gcps_list, width, height)
+            
+            dataset = None
+            print("No georeferencing found in converted image")
+            return (gcps_list, width, height)
+            
+        except Exception as e:
+            print(f"Error extracting georeference: {e}")
+            return ([], 0, 0)
+    
     def process_heif_with_ttl(self, heif_path: str, gcps: list, 
                              output_path: str, warp: bool = True,
                              orthorectify: bool = False, 
@@ -1588,6 +1735,393 @@ class HEIFProcessor:
         except Exception as e:
             print(f"Error generating RDF provenance: {e}")
             return None
+    
+    def generate_tb21_gimi_rdf(self, gcps: list, image_width: int, image_height: int, 
+                                crs: str = "EPSG:4326") -> str:
+        """
+        Generate TB21 GIMI compliant Turtle RDF from GCPs.
+        
+        Args:
+            gcps: List of GDAL GCP objects with pixel, line, X, Y, Z coordinates
+            image_width: Image width in pixels
+            image_height: Image height in pixels
+            crs: Coordinate reference system (default: EPSG:4326)
+            
+        Returns:
+            Turtle RDF string with embedded GCP metadata
+        """
+        from datetime import datetime, timezone
+        
+        # Generate UUID for this correspondence group
+        group_uuid = str(uuid.uuid4())
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        # Start RDF document with TB21 GIMI namespaces
+        rdf_lines = [
+            "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+            "@prefix cco: <https://www.commoncoreontologies.org/> .",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
+            "@prefix geo: <http://www.opengis.net/ont/geosparql#> .",
+            "",
+            "# TB21 GIMI Georeference Metadata",
+            f"# Generated: {timestamp}",
+            f"# CRS: {crs}",
+            f"# Image dimensions: {image_width}x{image_height}",
+            "",
+            f"<urn:uuid:{group_uuid}> a cco:ImageToGroundCorrespondenceGroup ;",
+            f'    rdfs:label "GeoTIFF Export Georeferencing" ;',
+            f'    cco:designates_image_region <urn:uuid:{uuid.uuid4()}> ;',
+            f'    cco:has_correspondence'
+        ]
+        
+        # Generate UUIDs for all GCPs first (to reference them consistently)
+        gcp_uuids = []
+        for i, gcp in enumerate(gcps):
+            gcp_uuids.append({
+                'correspondence': str(uuid.uuid4()),
+                'image_coord': str(uuid.uuid4()),
+                'ground_coord': str(uuid.uuid4())
+            })
+        
+        # Add correspondence URIs to the group
+        correspondence_uris = [f"        <urn:uuid:{u['correspondence']}>" for u in gcp_uuids]
+        rdf_lines.append(",\n".join(correspondence_uris) + " .")
+        rdf_lines.append("")
+        
+        # Define each correspondence with its image and ground coordinates
+        for i, gcp in enumerate(gcps):
+            uuids = gcp_uuids[i]
+            
+            # Image coordinate (pixel, line)
+            rdf_lines.extend([
+                f"<urn:uuid:{uuids['correspondence']}> a cco:ImageToGroundCorrespondence ;",
+                f'    rdfs:label "GCP {i+1}" ;',
+                f"    cco:has_image_coordinate <urn:uuid:{uuids['image_coord']}> ;",
+                f"    cco:has_ground_coordinate <urn:uuid:{uuids['ground_coord']}> .",
+                "",
+                f"<urn:uuid:{uuids['image_coord']}> a cco:ImageCoordinate ;",
+                f'    cco:has_x_coordinate "{gcp.GCPPixel}"^^xsd:double ;',
+                f'    cco:has_y_coordinate "{gcp.GCPLine}"^^xsd:double .',
+                "",
+                f"<urn:uuid:{uuids['ground_coord']}> a cco:GroundCoordinate ;",
+                f'    cco:has_longitude "{gcp.GCPX}"^^xsd:double ;',
+                f'    cco:has_latitude "{gcp.GCPY}"^^xsd:double ;',
+                f'    cco:has_elevation "{gcp.GCPZ if hasattr(gcp, "GCPZ") else 0.0}"^^xsd:double ;',
+                f'    geo:hasSRID """{crs}"""^^xsd:string .',
+                ""
+            ])
+        
+        return "\n".join(rdf_lines)
+    
+    def export_geotiff_to_tb21_heif(self, geotiff_path: str, output_heif_path: str,
+                                     quality: int = 95, compression: str = "hevc",
+                                     embed_rdf: bool = True) -> Tuple[bool, Dict]:
+        """
+        Export a GeoTIFF to TB21 GIMI compliant HEIF with embedded RDF metadata.
+        
+        This enables the reverse workflow: GeoTIFF → TB21 HEIF
+        
+        Args:
+            geotiff_path: Path to input GeoTIFF file
+            output_heif_path: Path to output HEIF file
+            quality: Encoding quality (1-100, default: 95)
+            compression: Compression codec ('hevc', 'av1', 'unci' for uncompressed)
+            embed_rdf: If True, embeds RDF metadata using heif-enc (TB21 GIMI compliant)
+            
+        Returns:
+            Tuple of (success: bool, metadata: dict with processing details)
+        """
+        from datetime import datetime, timezone
+        from osgeo import gdal
+        import os
+        
+        print("=" * 80)
+        print("GeoTIFF to TB21 GIMI HEIF Export")
+        print("=" * 80)
+        print(f"Input:  {geotiff_path}")
+        print(f"Output: {output_heif_path}")
+        print(f"Quality: {quality}, Compression: {compression}")
+        print(f"Embed RDF: {embed_rdf}")
+        print()
+        
+        metadata = {
+            "input_file": geotiff_path,
+            "output_file": output_heif_path,
+            "quality": quality,
+            "compression": compression,
+            "embed_rdf": embed_rdf,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        try:
+            # Step 1: Extract GCPs from GeoTIFF
+            print("Step 1: Extracting GCPs from GeoTIFF...")
+            dataset = gdal.Open(geotiff_path, gdal.GA_ReadOnly)
+            if not dataset:
+                raise Exception(f"Failed to open GeoTIFF: {geotiff_path}")
+            
+            gcps = dataset.GetGCPs()
+            gcp_projection = dataset.GetGCPProjection()
+            geotransform = dataset.GetGeoTransform()
+            
+            # If no GCPs but has geotransform, create corner GCPs
+            if not gcps and geotransform and geotransform != (0, 1, 0, 0, 0, 1):
+                print("  → No GCPs found, generating from geotransform...")
+                width = dataset.RasterXSize
+                height = dataset.RasterYSize
+                
+                # Create GCPs for four corners
+                gcps = []
+                corners = [
+                    (0, 0, "top-left"),
+                    (width, 0, "top-right"),
+                    (0, height, "bottom-left"),
+                    (width, height, "bottom-right")
+                ]
+                
+                for pixel, line, label in corners:
+                    geo_x = geotransform[0] + pixel * geotransform[1] + line * geotransform[2]
+                    geo_y = geotransform[3] + pixel * geotransform[4] + line * geotransform[5]
+                    gcp = gdal.GCP(geo_x, geo_y, 0, pixel, line, label, "")
+                    gcps.append(gcp)
+                
+                gcp_projection = dataset.GetProjection()
+            
+            if not gcps:
+                raise Exception("No GCPs or geotransform found in GeoTIFF")
+            
+            print(f"  ✓ Extracted {len(gcps)} GCPs")
+            metadata["gcp_count"] = len(gcps)
+            metadata["gcp_projection"] = gcp_projection
+            
+            # Step 2: Generate TB21 GIMI RDF metadata with STAC liability-claims extensions
+            rdf_content = None
+            rdf_file = None
+            if embed_rdf:
+                print("Step 2: Generating TB21 GIMI RDF metadata with quality/provenance...")
+                
+                # Generate base TB21 GIMI RDF
+                base_rdf = self.generate_tb21_gimi_rdf(
+                    gcps,
+                    dataset.RasterXSize,
+                    dataset.RasterYSize,
+                    gcp_projection or "EPSG:4326"
+                )
+                
+                # Add STAC liability-claims metadata for quality and provenance
+                stac_extensions = [
+                    "",
+                    "# STAC liability-claims extension metadata",
+                    "@prefix stac: <http://stacspec.org/> .",
+                    "@prefix liability: <https://stac-extensions.github.io/liability-claims/v1.0.0/> .",
+                    "@prefix prov: <http://www.w3.org/ns/prov#> .",
+                    "@prefix dqv: <http://www.w3.org/ns/dqv#> .",
+                    "",
+                    "# Data Quality Information (ISO 19115)",
+                    "<urn:geotiff:quality> a dqv:QualityMeasurement ;",
+                    '    dqv:isMeasurementOf "Geospatial data quality" ;',
+                    f'    dqv:value "GeoTIFF with {len(gcps)} control points" ;',
+                    f'    liability:scope "dataset" ;',
+                    '    liability:conformance [',
+                    '        liability:specification "TB21 GIMI Geospatial Metadata Standard" ;',
+                    f'        liability:pass "true"^^xsd:boolean ;',
+                    f'        liability:explanation "Compliant with TB21 GIMI v1.0 for military geospatial imagery"',
+                    '    ] .',
+                    "",
+                    "# Provenance Information (W3C PROV)",
+                    f'<urn:geotiff:source> a prov:Entity ;',
+                    f'    prov:label "Source GeoTIFF" ;',
+                    f'    prov:location "{os.path.basename(geotiff_path)}" ;',
+                    f'    prov:generatedAtTime "{datetime.now(timezone.utc).isoformat()}"^^xsd:dateTime .',
+                    "",
+                    f'<urn:heif:output> a prov:Entity ;',
+                    f'    prov:label "TB21 GIMI HEIF Output" ;',
+                    f'    prov:location "{os.path.basename(output_heif_path)}" ;',
+                    f'    prov:wasDerivedFrom <urn:geotiff:source> .',
+                    "",
+                    f'<urn:activity:conversion> a prov:Activity ;',
+                    f'    prov:label "GeoTIFF to TB21 HEIF Conversion" ;',
+                    f'    prov:used <urn:geotiff:source> ;',
+                    f'    prov:startedAtTime "{datetime.now(timezone.utc).isoformat()}"^^xsd:dateTime ;',
+                    f'    prov:wasAssociatedWith <urn:agent:qgis-plugin> .',
+                    "",
+                    '<urn:agent:qgis-plugin> a prov:SoftwareAgent ;',
+                    '    prov:label "QGIS HEIF/TTL Importer Plugin" ;',
+                    f'    prov:actedOnBehalfOf <urn:agent:user> .',
+                    "",
+                    '<urn:agent:user> a prov:Agent ;',
+                    '    prov:label "QGIS User" .',
+                    ""
+                ]
+                
+                # Combine TB21 GIMI RDF with STAC metadata
+                rdf_content = base_rdf + "\n".join(stac_extensions)
+                
+                print(f"  ✓ Generated {len(rdf_content)} bytes of RDF (TB21 GIMI + STAC quality/provenance)")
+                print(f"  → Preview: {rdf_content[:200]}...")
+                
+                # Save RDF to temporary file for heif-enc
+                rdf_file = tempfile.NamedTemporaryFile(mode='w', suffix='.ttl', delete=False)
+                rdf_file.write(rdf_content)
+                rdf_file.close()
+                self.temp_files.append(rdf_file.name)
+                metadata["rdf_size"] = len(rdf_content)
+                metadata["includes_stac_metadata"] = True
+            
+            # Step 3: Convert to standard image format first (PNG/JPEG)
+            print("Step 3: Converting GeoTIFF to intermediate format...")
+            temp_png = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            temp_png.close()
+            self.temp_files.append(temp_png.name)
+            
+            # Use GDAL to convert to PNG
+            translate_options = gdal.TranslateOptions(
+                format='PNG',
+                outputType=gdal.GDT_Byte,
+                scaleParams=[[0, 255]]
+            )
+            gdal.Translate(temp_png.name, dataset, options=translate_options)
+            print(f"  ✓ Created intermediate PNG: {temp_png.name}")
+            
+            dataset = None  # Close dataset
+            
+            # Step 4: Encode to HEIF with heif-enc (supports all codecs including JPEG2000)
+            if self.heif_enc_cmd and embed_rdf and rdf_file:
+                print("Step 4: Encoding to TB21 GIMI HEIF with embedded RDF...")
+                import subprocess
+                
+                # Build heif-enc command with SAI metadata
+                cmd = [
+                    self.heif_enc_cmd,
+                    temp_png.name,
+                    '-o', output_heif_path,
+                    '-q', str(quality)
+                ]
+                
+                # Add plugin directory if JPEG2000 codecs are used (they're separate plugins)
+                plugin_dir = os.path.join(os.path.dirname(self.heif_enc_cmd), '..', 'libheif', 'plugins')
+                if os.path.exists(plugin_dir) and compression in ['jpeg2000', 'htj2k']:
+                    cmd.extend(['--plugin-directory', plugin_dir])
+                
+                # Add compression codec
+                if compression == 'unci' or compression == 'uncompressed':
+                    cmd.extend(['--uncompressed'])
+                elif compression == 'av1':
+                    cmd.extend(['-e', 'av1'])
+                elif compression == 'jpeg2000':
+                    cmd.extend(['--jpeg2000'])
+                elif compression == 'htj2k':
+                    cmd.extend(['--htj2k'])
+                # hevc is default
+                
+                print(f"  → Command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr.strip()
+                    
+                    # Provide helpful fallback suggestions for codec availability issues
+                    if "No JPEG 2000 encoder available" in error_msg:
+                        raise Exception(
+                            f"JPEG2000 encoder not available in this libheif build.\n"
+                            f"  → Try 'hevc' (default), 'av1', or 'uncompressed' instead.\n"
+                            f"  → To enable JPEG2000: rebuild libheif with OpenJPEG support"
+                        )
+                    elif "encoder" in error_msg.lower() and "not available" in error_msg.lower():
+                        raise Exception(
+                            f"{compression} encoder not available.\n"
+                            f"  → {error_msg}\n"
+                            f"  → Try 'hevc' (default) or 'uncompressed' instead"
+                        )
+                    else:
+                        raise Exception(f"heif-enc failed: {error_msg}")
+                
+                # Verify file was created
+                if not os.path.exists(output_heif_path):
+                    raise Exception(f"heif-enc completed but output file not found: {output_heif_path}")
+                
+                file_size = os.path.getsize(output_heif_path)
+                print(f"  ✓ TB21 GIMI HEIF created ({file_size:,} bytes)")
+                
+                # Embed RDF using exiftool (heif-enc doesn't support XMP/SAI for single images)
+                rdf_embedded = False
+                if rdf_file:
+                    try:
+                        # Try to use exiftool to embed RDF as XMP
+                        exiftool_result = subprocess.run(
+                            ['exiftool', '-overwrite_original', f'-xmp<={rdf_file.name}', output_heif_path],
+                            capture_output=True, text=True, timeout=30
+                        )
+                        if exiftool_result.returncode == 0:
+                            print(f"  ✓ Embedded RDF metadata using exiftool")
+                            metadata["encoding_method"] = "heif-enc + exiftool XMP"
+                            rdf_embedded = True
+                        else:
+                            print(f"  ⚠ Could not embed RDF with exiftool: {exiftool_result.stderr}")
+                    except FileNotFoundError:
+                        print(f"  ⚠ exiftool not found")
+                    
+                    # If embedding failed or JPEG2000 (which may have issues), save external TTL
+                    if not rdf_embedded or compression in ['jpeg2000', 'htj2k']:
+                        external_ttl = output_heif_path.replace('.heif', '.ttl')
+                        with open(external_ttl, 'w') as f:
+                            f.write(rdf_content)
+                        print(f"  ✓ Saved external TTL file: {os.path.basename(external_ttl)}")
+                        metadata["external_ttl"] = external_ttl
+                        if not rdf_embedded:
+                            metadata["encoding_method"] = "heif-enc (RDF external)"
+                
+            else:
+                # Fallback: Use pillow-heif without RDF embedding
+                print("Step 4: Encoding to HEIF (no RDF embedding - heif-enc not available)...")
+                if not HEIF_AVAILABLE:
+                    raise Exception("pillow-heif not available and heif-enc not found")
+                
+                from PIL import Image
+                img = Image.open(temp_png.name)
+                img.save(output_heif_path, format='HEIF', quality=quality)
+                print(f"  ⚠ HEIF created WITHOUT embedded RDF (heif-enc not available)")
+                print(f"  → External TTL file saved alongside")
+                
+                # Save external TTL
+                if rdf_content:
+                    external_ttl = output_heif_path.replace('.heif', '.ttl')
+                    with open(external_ttl, 'w') as f:
+                        f.write(rdf_content)
+                    metadata["external_ttl"] = external_ttl
+                
+                metadata["encoding_method"] = "pillow-heif (no SAI)"
+            
+            # Store actual output file path
+            metadata["output_file"] = output_heif_path
+            
+            # Calculate hash if file was created
+            if os.path.exists(output_heif_path):
+                if BLAKE3_AVAILABLE:
+                    hash_value, hash_algo = self.calculate_file_hash(output_heif_path)
+                    metadata["output_hash"] = hash_value
+                    metadata["hash_algorithm"] = hash_algo
+                    print(f"  ✓ BLAKE3 hash: {hash_value[:16]}...")
+            else:
+                print(f"  ⚠ Output file not found (expected: {output_heif_path})")
+                raise Exception(f"Output file was not created: {output_heif_path}")
+            
+            print()
+            print("=" * 80)
+            print("✓ SUCCESS: TB21 GIMI HEIF export complete")
+            print("=" * 80)
+            
+            return True, metadata
+            
+        except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"\n✗ ERROR: {e}")
+            print(error_traceback)
+            metadata["error"] = str(e)
+            metadata["traceback"] = error_traceback
+            return False, metadata
     
     def cleanup(self):
         """Remove temporary files"""

@@ -89,11 +89,16 @@ class TTLParser:
     
     def _parse_all(self):
         """Execute all parsing steps"""
-        self._parse_image_coordinates()
-        self._parse_ground_coordinates()
-        self._parse_correspondences()
-        self._parse_tiles()
-        self._parse_correspondence_groups()
+        # Try new CCO/TB21 GIMI format first
+        self._parse_cco_format()
+        
+        # Fallback to old IMH format if no results
+        if not self.correspondences:
+            self._parse_image_coordinates()
+            self._parse_ground_coordinates()
+            self._parse_correspondences()
+            self._parse_tiles()
+            self._parse_correspondence_groups()
     
     def _parse_image_coordinates(self):
         """Extract all image coordinates from TTL"""
@@ -188,6 +193,50 @@ class TTLParser:
                 corr.ground_coord.lat
             ))
         return gcps
+    
+    def get_image_dimensions(self) -> Tuple[int, int]:
+        """Extract image dimensions from TTL comments or metadata"""
+        # Look for comment like: # Image dimensions: 4394x3775
+        pattern = r'#\s*Image dimensions:\s*(\d+)x(\d+)'
+        match = re.search(pattern, self.content)
+        if match:
+            return (int(match.group(1)), int(match.group(2)))
+        return (0, 0)
+    
+    def _parse_cco_format(self):
+        """Parse CCO/TB21 GIMI format RDF"""
+        # Parse ImageCoordinate entities
+        # Pattern: <urn:uuid:...> a cco:ImageCoordinate ; cco:has_x_coordinate "123.45"^^xsd:double ; cco:has_y_coordinate "678.90"^^xsd:double
+        img_coord_pattern = r'<(urn:uuid:[^>]+)>\s+a\s+cco:ImageCoordinate\s*;[^<]*cco:has_x_coordinate\s+"([\d\.\-]+)"[^<]*cco:has_y_coordinate\s+"([\d\.\-]+)"'
+        for match in re.finditer(img_coord_pattern, self.content, re.MULTILINE | re.DOTALL):
+            uri = match.group(1)
+            x = float(match.group(2))
+            y = float(match.group(3))
+            self.image_coords[uri] = ImageCoordinate(uri, int(x), int(y))
+        
+        # Parse GroundCoordinate entities
+        # Pattern: <urn:uuid:...> a cco:GroundCoordinate ; cco:has_longitude "138.49"^^xsd:double ; cco:has_latitude "-34.80"^^xsd:double
+        ground_coord_pattern = r'<(urn:uuid:[^>]+)>\s+a\s+cco:GroundCoordinate\s*;[^<]*cco:has_longitude\s+"([\d\.\-]+)"[^<]*cco:has_latitude\s+"([\d\.\-]+)"'
+        for match in re.finditer(ground_coord_pattern, self.content, re.MULTILINE | re.DOTALL):
+            uri = match.group(1)
+            lon = float(match.group(2))
+            lat = float(match.group(3))
+            self.ground_coords[uri] = GroundCoordinate(uri, lon, lat)
+        
+        # Parse ImageToGroundCorrespondence entities
+        # Pattern: <urn:uuid:...> a cco:ImageToGroundCorrespondence ; ... cco:has_image_coordinate <urn:uuid:IMG> ; cco:has_ground_coordinate <urn:uuid:GROUND>
+        corr_pattern = r'<(urn:uuid:[^>]+)>\s+a\s+cco:ImageToGroundCorrespondence\s*;[^<]*cco:has_image_coordinate\s+<(urn:uuid:[^>]+)>[^<]*cco:has_ground_coordinate\s+<(urn:uuid:[^>]+)>'
+        for match in re.finditer(corr_pattern, self.content, re.MULTILINE | re.DOTALL):
+            corr_uri = match.group(1)
+            img_uri = match.group(2)
+            ground_uri = match.group(3)
+            
+            if img_uri in self.image_coords and ground_uri in self.ground_coords:
+                self.correspondences[corr_uri] = Correspondence(
+                    corr_uri,
+                    self.image_coords[img_uri],
+                    self.ground_coords[ground_uri]
+                )
     
     def get_gcps_for_tile(self, tile_label: str) -> List[Tuple[int, int, float, float]]:
         """Get GCPs for a specific tile"""

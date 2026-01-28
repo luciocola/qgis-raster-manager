@@ -206,6 +206,24 @@ class HEIFTTLImporter:
             else:
                 raise Exception("No metadata source available (neither external TTL nor internal RDF)")
             
+            # FALLBACK: If no GCPs found in TTL/RDF, try extracting from converted image
+            if len(gcps) == 0:
+                self.log_message("No GCPs in metadata, attempting to extract from converted image...")
+                processor = self.dialog.heif_processor if self.dialog.heif_processor else HEIFProcessor()
+                
+                # Convert HEIF to TIFF first
+                tiff_path = processor.convert_heif_to_tiff(heif_path)
+                if tiff_path:
+                    extracted_gcps, width, height = processor.extract_georeference_from_tiff(tiff_path)
+                    if len(extracted_gcps) > 0:
+                        gcps = extracted_gcps
+                        self.log_message(f"✓ Extracted {len(gcps)} GCPs from image (GMLJP2 or geotransform)")
+                        self.log_message(f"  Image dimensions: {width}x{height}")
+                    else:
+                        raise Exception("No georeferencing found in TTL or embedded in image")
+                else:
+                    raise Exception("Failed to convert HEIF for georeference extraction")
+            
             # Check if sufficient GCPs for transformation order
             if orthorectify:
                 min_gcps_required = {1: 3, 2: 6, 3: 10, -1: 3}  # -1 = TPS
