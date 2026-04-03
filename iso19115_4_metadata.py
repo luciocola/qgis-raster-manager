@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 4113Eng-wfs
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
 ISO 19115-4 Imagery Metadata Extractor
 

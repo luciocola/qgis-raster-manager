@@ -3,565 +3,591 @@
  <class>HEIFTTLImporterDialog</class>
  <widget class="QDialog" name="HEIFTTLImporterDialog">
   <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>700</width>
-    <height>700</height>
-   </rect>
+   <rect><x>0</x><y>0</y><width>740</width><height>680</height></rect>
   </property>
-  <property name="windowTitle">
-   <string>HEIF/TTL Imagery Importer</string>
+  <property name="minimumSize">
+   <size><width>580</width><height>500</height></size>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout">
+  <property name="sizeGripEnabled"><bool>true</bool></property>
+  <property name="windowTitle"><string>General Raster Importer</string></property>
+  <layout class="QVBoxLayout" name="verticalLayoutMain">
    <item>
-    <widget class="QGroupBox" name="groupBoxFiles">
-     <property name="title">
-      <string>Input Files</string>
-     </property>
-     <layout class="QGridLayout" name="gridLayout">
-      <item row="0" column="0">
-       <widget class="QLabel" name="labelHEIF">
-        <property name="text">
-         <string>HEIF Image:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="QLineEdit" name="txtHEIFPath"/>
-      </item>
-      <item row="0" column="2">
-       <widget class="QPushButton" name="btnBrowseHEIF">
-        <property name="text">
-         <string>Browse...</string>
-        </property>
-        <property name="maximumWidth">
-         <number>100</number>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="3">
-       <widget class="QPushButton" name="btnShowStructure">
-        <property name="text">
-         <string>Show Structure</string>
-        </property>
-        <property name="maximumWidth">
-         <number>120</number>
-        </property>
-        <property name="toolTip">
-         <string>Display complete HEIF/HEVC file structure including metadata, images, and thumbnails</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="labelTTL">
-        <property name="text">
-         <string>TTL Metadata:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <widget class="QLineEdit" name="txtTTLPath"/>
-      </item>
-      <item row="1" column="2">
-       <widget class="QPushButton" name="btnBrowseTTL">
-        <property name="text">
-         <string>Browse...</string>
-        </property>
-        <property name="maximumWidth">
-         <number>100</number>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBoxOptions">
-     <property name="title">
-      <string>Import Options</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout">
-        <item>
-         <widget class="QLabel" name="labelOutput">
-          <property name="text">
-           <string>Output Directory:</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QLineEdit" name="txtOutputPath"/>
-        </item>
-        <item>
-         <widget class="QPushButton" name="btnBrowseOutput">
-          <property name="text">
-           <string>Browse...</string>
-          </property>
-          <property name="maximumWidth">
-           <number>100</number>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chkWarp">
-        <property name="text">
-         <string>Warp image for proper display (recommended)</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chkOrthorectify">
-        <property name="text">
-         <string>Orthorectify using GCPs (advanced geometric correction)</string>
-        </property>
-        <property name="checked">
-         <bool>false</bool>
-        </property>
-        <property name="toolTip">
-         <string>Apply polynomial transformation using Ground Control Points for precise geometric correction. Recommended for aerial/satellite imagery.</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_3">
-        <item>
-         <widget class="QLabel" name="labelTransform">
-          <property name="text">
-           <string>Transformation Order:</string>
-          </property>
-          <property name="enabled">
-           <bool>false</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="cmbTransformOrder">
-          <property name="enabled">
-           <bool>false</bool>
-          </property>
-          <property name="toolTip">
-           <string>Polynomial order for orthorectification. Higher orders fit complex distortions but require more GCPs.</string>
-          </property>
+    <widget class="QTabWidget" name="tabWidget">
+     <property name="currentIndex"><number>0</number></property>
+
+     <!-- TAB 1 : Input & Import -->
+     <widget class="QWidget" name="tabInput">
+      <attribute name="title"><string>Input &amp; Import</string></attribute>
+      <layout class="QVBoxLayout" name="verticalLayoutTab1">
+       <item>
+        <widget class="QGroupBox" name="groupBoxFiles">
+         <property name="title"><string>Input Files</string></property>
+         <layout class="QGridLayout" name="gridLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="labelHEIF">
+            <property name="text"><string>Raster Input:</string></property>
+            <property name="toolTip"><string>Supported formats: HEIF/HEIC, GeoTIFF, JPEG2000, PNG, JPEG and any GDAL-readable raster</string></property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QLineEdit" name="txtHEIFPath"/>
+          </item>
+          <item row="0" column="2">
+           <widget class="QPushButton" name="btnBrowseHEIF">
+            <property name="text"><string>Browse...</string></property>
+            <property name="maximumWidth"><number>100</number></property>
+           </widget>
+          </item>
+          <item row="0" column="3">
+           <widget class="QPushButton" name="btnShowStructure">
+            <property name="text"><string>Show Structure</string></property>
+            <property name="maximumWidth"><number>120</number></property>
+            <property name="toolTip"><string>Display complete raster file structure including metadata and images</string></property>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="4">
+           <widget class="QLabel" name="lblRasterStatus">
+            <property name="text"><string>No file selected.</string></property>
+            <property name="wordWrap"><bool>true</bool></property>
+            <property name="toolTip"><string>Detected raster format, dimensions, georeferencing status and available metadata sources</string></property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="labelTTL">
+            <property name="text"><string>Metadata:</string></property>
+            <property name="toolTip"><string>Supported formats: TTL/RDF (GCPs), XML/RDF (XMP), JSON (_provenance.json)</string></property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QLineEdit" name="txtTTLPath"/>
+          </item>
+          <item row="2" column="2">
+           <widget class="QPushButton" name="btnBrowseTTL">
+            <property name="text"><string>Browse...</string></property>
+            <property name="maximumWidth"><number>100</number></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="groupBoxOptions">
+         <property name="title"><string>Import Options</string></property>
+         <layout class="QVBoxLayout" name="verticalLayout_2">
           <item>
-           <property name="text">
-            <string>1st Order (3+ GCPs, affine)</string>
-           </property>
+           <layout class="QHBoxLayout" name="horizontalLayoutOutput">
+            <item><widget class="QLabel" name="labelOutput"><property name="text"><string>Output Directory:</string></property></widget></item>
+            <item><widget class="QLineEdit" name="txtOutputPath"/></item>
+            <item>
+             <widget class="QPushButton" name="btnBrowseOutput">
+              <property name="text"><string>Browse...</string></property>
+              <property name="maximumWidth"><number>100</number></property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>2nd Order (6+ GCPs)</string>
-           </property>
+           <widget class="QCheckBox" name="chkWarp">
+            <property name="text"><string>Warp image for proper display (recommended)</string></property>
+            <property name="checked"><bool>true</bool></property>
+           </widget>
           </item>
           <item>
-           <property name="text">
-            <string>3rd Order (10+ GCPs)</string>
-           </property>
+           <widget class="QCheckBox" name="chkOrthorectify">
+            <property name="text"><string>Orthorectify using GCPs (advanced geometric correction)</string></property>
+            <property name="checked"><bool>false</bool></property>
+            <property name="toolTip"><string>Apply polynomial transformation using Ground Control Points for precise geometric correction.</string></property>
+           </widget>
           </item>
           <item>
-           <property name="text">
-            <string>TPS (Thin Plate Spline)</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_2">
-        <item>
-         <widget class="QLabel" name="labelResample">
-          <property name="text">
-           <string>Resampling Method:</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="cmbResample">
-          <item>
-           <property name="text">
-            <string>Cubic (best quality)</string>
-           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_3">
+            <item>
+             <widget class="QLabel" name="labelTransform">
+              <property name="text"><string>Transformation Order:</string></property>
+              <property name="enabled"><bool>false</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="cmbTransformOrder">
+              <property name="enabled"><bool>false</bool></property>
+              <property name="toolTip"><string>Polynomial order for orthorectification.</string></property>
+              <item><property name="text"><string>1st Order (3+ GCPs, affine)</string></property></item>
+              <item><property name="text"><string>2nd Order (6+ GCPs)</string></property></item>
+              <item><property name="text"><string>3rd Order (10+ GCPs)</string></property></item>
+              <item><property name="text"><string>TPS (Thin Plate Spline)</string></property></item>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>Lanczos (high quality)</string>
-           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_2">
+            <item><widget class="QLabel" name="labelResample"><property name="text"><string>Resampling Method:</string></property></widget></item>
+            <item>
+             <widget class="QComboBox" name="cmbResample">
+              <item><property name="text"><string>Cubic (best quality)</string></property></item>
+              <item><property name="text"><string>Lanczos (high quality)</string></property></item>
+              <item><property name="text"><string>Bilinear</string></property></item>
+              <item><property name="text"><string>Nearest Neighbor (fastest)</string></property></item>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>Bilinear</string>
-           </property>
+           <widget class="QCheckBox" name="chkAddToMap">
+            <property name="text"><string>Add result to map canvas</string></property>
+            <property name="checked"><bool>true</bool></property>
+           </widget>
           </item>
           <item>
-           <property name="text">
-            <string>Nearest Neighbor (fastest)</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chkAddToMap">
-        <property name="text">
-         <string>Add result to map canvas</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chkExportJP2">
-        <property name="text">
-         <string>Export as JPEG2000 (.jp2) instead of GeoTIFF</string>
-        </property>
-        <property name="checked">
-         <bool>false</bool>
-        </property>
-        <property name="toolTip">
-         <string>Export as JPEG2000 format with better compression (20-30% smaller) and native QGIS support. Requires heif-enc or GDAL JPEG2000 driver.</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chkGenerateRDF">
-        <property name="text">
-         <string>Generate RDF/TTL provenance file</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-        <property name="toolTip">
-         <string>Create an RDF Turtle file with processing provenance metadata (W3C PROV-O format)</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayoutImportButton">
-     <item>
-      <spacer name="horizontalSpacerImport">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item>
-      <widget class="QPushButton" name="btnImport">
-       <property name="text">
-        <string>Start Import</string>
-       </property>
-       <property name="minimumWidth">
-        <number>120</number>
-       </property>
-       <property name="toolTip">
-        <string>Start the HEIF/TTL import process</string>
-       </property>
-       <property name="default">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBoxExport">
-     <property name="title">
-      <string>Export GeoTIFF to TB21 GIMI HEIF</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayoutExport">
-      <item>
-       <layout class="QGridLayout" name="gridLayoutExport">
-        <item row="0" column="0">
-         <widget class="QLabel" name="labelGeoTIFFSource">
-          <property name="text">
-           <string>Source:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <widget class="QComboBox" name="comboGeoTIFFSource">
-          <property name="toolTip">
-           <string>Select from loaded layers or browse for file</string>
-          </property>
-          <item>
-           <property name="text">
-            <string>Browse for file...</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-        <item row="0" column="2">
-         <widget class="QPushButton" name="btnRefreshLayers">
-          <property name="text">
-           <string>🔄</string>
-          </property>
-          <property name="toolTip">
-           <string>Refresh list of available raster layers</string>
-          </property>
-          <property name="maximumWidth">
-           <number>40</number>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="3">
-         <widget class="QPushButton" name="btnBrowseGeoTIFFSource">
-          <property name="text">
-           <string>Browse...</string>
-          </property>
-          <property name="maximumWidth">
-           <number>100</number>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="0">
-         <widget class="QLabel" name="labelGeoTIFF">
-          <property name="text">
-           <string>File Path:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="1">
-         <widget class="QLineEdit" name="txtGeoTIFFPath">
-          <property name="readOnly">
-           <bool>false</bool>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="2">
-         <widget class="QPushButton" name="btnBrowseGeoTIFF">
-          <property name="text">
-           <string>Browse...</string>
-          </property>
-          <property name="maximumWidth">
-           <number>100</number>
-          </property>
-         </widget>
-        </item>
-        <item row="2" column="0">
-         <widget class="QLabel" name="labelHEIFOutput">
-          <property name="text">
-           <string>Output HEIF:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="2" column="1">
-         <widget class="QLineEdit" name="txtHEIFOutputPath"/>
-        </item>
-        <item row="2" column="2">
-         <widget class="QPushButton" name="btnBrowseHEIFOutput">
-          <property name="text">
-           <string>Browse...</string>
-          </property>
-          <property name="maximumWidth">
-           <number>100</number>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayoutExportSettings">
-        <item>
-         <widget class="QLabel" name="labelQuality">
-          <property name="text">
-           <string>Quality:</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QSpinBox" name="spinQuality">
-          <property name="minimum">
-           <number>1</number>
-          </property>
-          <property name="maximum">
-           <number>100</number>
-          </property>
-          <property name="value">
-           <number>95</number>
-          </property>
-          <property name="toolTip">
-           <string>Image quality (1-100, higher is better)</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QLabel" name="labelCompression">
-          <property name="text">
-           <string>Compression:</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="comboCompression">
-          <property name="toolTip">
-           <string>HEIF compression codec</string>
-          </property>
-          <item>
-           <property name="text">
-            <string>hevc</string>
-           </property>
+           <widget class="QCheckBox" name="chkExportJP2">
+            <property name="text"><string>Export as JPEG2000 (.jp2) instead of GeoTIFF</string></property>
+            <property name="checked"><bool>false</bool></property>
+            <property name="visible"><bool>false</bool></property>
+            <property name="toolTip"><string>Legacy: use Output Format combo below instead</string></property>
+           </widget>
           </item>
           <item>
-           <property name="text">
-            <string>av1</string>
-           </property>
+           <widget class="QCheckBox" name="chkGenerateRDF">
+            <property name="text"><string>Generate RDF/TTL provenance file</string></property>
+            <property name="checked"><bool>true</bool></property>
+            <property name="toolTip"><string>Create an RDF Turtle file with processing provenance metadata (W3C PROV-O format)</string></property>
+           </widget>
           </item>
           <item>
-           <property name="text">
-            <string>jpeg2000</string>
-           </property>
+           <layout class="QHBoxLayout" name="horizontalLayoutOutputFormat">
+            <item><widget class="QLabel" name="labelOutputFormat"><property name="text"><string>Output Format:</string></property></widget></item>
+            <item>
+             <widget class="QComboBox" name="cmbOutputFormat">
+              <property name="toolTip"><string>Select the GDAL output format for the converted raster</string></property>
+              <item><property name="text"><string>GeoTIFF (.tif)</string></property></item>
+              <item><property name="text"><string>Cloud-Optimised GeoTIFF (.tif)</string></property></item>
+              <item><property name="text"><string>JPEG2000 – OpenJPEG (.jp2)</string></property></item>
+              <item><property name="text"><string>PNG (.png)</string></property></item>
+              <item><property name="text"><string>JPEG (.jpg)</string></property></item>
+              <item><property name="text"><string>HFA / ERDAS Imagine (.img)</string></property></item>
+              <item><property name="text"><string>ECW (.ecw)</string></property></item>
+              <item><property name="text"><string>NITF (.ntf)</string></property></item>
+              <item><property name="text"><string>GeoPackage Raster (.gpkg)</string></property></item>
+              <item><property name="text"><string>ENVI (.img / .hdr)</string></property></item>
+              <item><property name="text"><string>VRT (.vrt)</string></property></item>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>htj2k</string>
-           </property>
+           <layout class="QHBoxLayout" name="horizontalLayoutCreationOpts">
+            <item><widget class="QLabel" name="labelCreationOpts"><property name="text"><string>Creation Options:</string></property></widget></item>
+            <item>
+             <widget class="QLineEdit" name="txtCreationOpts">
+              <property name="placeholderText"><string>e.g. COMPRESS=DEFLATE TILED=YES (space-separated KEY=VALUE pairs)</string></property>
+              <property name="toolTip"><string>Optional GDAL creation options passed to the selected output driver</string></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="horizontalLayoutImportButton">
+         <item>
+          <spacer name="horizontalSpacerImport">
+           <property name="orientation"><enum>Qt::Horizontal</enum></property>
+           <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btnImport">
+           <property name="text"><string>Start Import</string></property>
+           <property name="minimumWidth"><number>120</number></property>
+           <property name="toolTip"><string>Start the import process</string></property>
+           <property name="default"><bool>true</bool></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="verticalSpacerTab1">
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>10</height></size></property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- TAB 2 : Metadata & Provenance -->
+     <widget class="QWidget" name="tabMetadata">
+      <attribute name="title"><string>Metadata &amp; Provenance</string></attribute>
+      <layout class="QVBoxLayout" name="verticalLayoutTab2">
+       <item>
+        <widget class="QGroupBox" name="groupBoxMetadata">
+         <property name="title"><string>Metadata Preview</string></property>
+         <layout class="QVBoxLayout" name="verticalLayout_3">
+          <item>
+           <widget class="QTextEdit" name="txtMetadataPreview">
+            <property name="readOnly"><bool>true</bool></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="groupBoxProvenance">
+         <property name="title"><string>Provenance Viewer</string></property>
+         <layout class="QVBoxLayout" name="verticalLayout_provenance">
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayoutProvenance">
+            <item>
+             <widget class="QLineEdit" name="txtProvenance">
+              <property name="placeholderText"><string>Path to _provenance.json file...</string></property>
+              <property name="readOnly"><bool>true</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnLoadProvenance">
+              <property name="text"><string>Load Provenance...</string></property>
+              <property name="toolTip"><string>Load a _provenance.json file to view processing history</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnExportSTAC">
+              <property name="text"><string>Export as STAC Item...</string></property>
+              <property name="toolTip"><string>Export the loaded provenance metadata as a STAC 1.0 Item JSON file</string></property>
+              <property name="enabled"><bool>false</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnQueryOSM">
+              <property name="text"><string>Query OSM Context...</string></property>
+              <property name="toolTip"><string>Query OpenStreetMap for roads, buildings, landuse and waterways within the image bounding box</string></property>
+              <property name="enabled"><bool>false</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnLoadOSMLayers">
+              <property name="text"><string>Load OSM Layers in Map</string></property>
+              <property name="toolTip"><string>Load the OSM context GeoJSON sidecar into the QGIS map as separate layers per feature type</string></property>
+              <property name="enabled"><bool>false</bool></property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>uncompressed</string>
-           </property>
+           <widget class="QLabel" name="lblProvenanceStatus">
+            <property name="text"><string>No provenance file loaded.</string></property>
+            <property name="wordWrap"><bool>true</bool></property>
+           </widget>
           </item>
-         </widget>
-        </item>
-        <item>
-         <widget class="QCheckBox" name="chkEmbedRDF">
-          <property name="text">
-           <string>Embed RDF Metadata (requires heif-enc)</string>
-          </property>
-          <property name="checked">
-           <bool>true</bool>
-          </property>
-          <property name="toolTip">
-           <string>Embed TB21 GIMI compliant RDF metadata inside HEIF file. Requires heif-enc command-line tool.</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayoutExportButtons">
-        <item>
-         <spacer name="horizontalSpacerExport">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QPushButton" name="btnExportToHEIF">
-          <property name="text">
-           <string>Export to TB21 HEIF</string>
-          </property>
-          <property name="minimumWidth">
-           <number>150</number>
-          </property>
-          <property name="toolTip">
-           <string>Convert GeoTIFF to TB21 GIMI compliant HEIF with embedded RDF metadata</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBoxMetadata">
-     <property name="title">
-      <string>Metadata Preview</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_3">
-      <item>
-       <widget class="QTextEdit" name="txtMetadataPreview">
-        <property name="readOnly">
-         <bool>true</bool>
-        </property>
-        <property name="minimumHeight">
-         <number>200</number>
-        </property>
-        <property name="maximumHeight">
-         <number>300</number>
-        </property>
-       </widget>
-      </item>
-     </layout>
+          <item>
+           <widget class="QTableWidget" name="tblProvenance">
+            <property name="minimumHeight"><number>120</number></property>
+            <property name="editTriggers"><set>QAbstractItemView::NoEditTriggers</set></property>
+            <property name="selectionMode"><enum>QAbstractItemView::SingleSelection</enum></property>
+            <property name="columnCount"><number>2</number></property>
+            <attribute name="horizontalHeaderLabel"><string>Field</string></attribute>
+            <attribute name="horizontalHeaderLabel2"><string>Value</string></attribute>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPlainTextEdit" name="txtISOQuality">
+            <property name="readOnly"><bool>true</bool></property>
+            <property name="placeholderText"><string>ISO 19115-4 quality details will appear here after loading a provenance file...</string></property>
+            <property name="maximumHeight"><number>130</number></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="groupBoxPublishing">
+         <property name="title"><string>Publishing Actions</string></property>
+         <layout class="QHBoxLayout" name="horizontalLayoutPublishing">
+          <item>
+           <widget class="QPushButton" name="btnSTACExportAction">
+            <property name="text"><string>STAC Query</string></property>
+            <property name="toolTip"><string>Select a STAC service and query items by bounding box, date range and collection</string></property>
+            <property name="enabled"><bool>true</bool></property>
+            <property name="minimumHeight"><number>32</number></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btnImmutablePublish">
+            <property name="text"><string>Immutable Catalogue Publish</string></property>
+            <property name="toolTip"><string>Publish to an immutable STAC catalogue via the Satellite STAC Importer plugin. Opens the plugin if installed, or prompts to download it.</string></property>
+            <property name="enabled"><bool>true</bool></property>
+            <property name="minimumHeight"><number>32</number></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- TAB 3 : Export Options -->
+     <widget class="QWidget" name="tabExport">
+      <attribute name="title"><string>Export Options</string></attribute>
+      <layout class="QVBoxLayout" name="verticalLayoutTab3">
+       <item>
+        <widget class="QGroupBox" name="groupBoxExport">
+         <property name="title"><string>Export GeoTIFF to TB21 GIMI HEIF</string></property>
+         <layout class="QVBoxLayout" name="verticalLayoutExport">
+          <item>
+           <layout class="QGridLayout" name="gridLayoutExport">
+            <item row="0" column="0">
+             <widget class="QLabel" name="labelGeoTIFFSource">
+              <property name="text"><string>Source:</string></property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QComboBox" name="comboGeoTIFFSource">
+              <property name="toolTip"><string>Select from loaded layers or browse for file</string></property>
+              <item><property name="text"><string>Browse for file...</string></property></item>
+             </widget>
+            </item>
+            <item row="0" column="2">
+             <widget class="QPushButton" name="btnRefreshLayers">
+              <property name="text"><string>&#x1F504;</string></property>
+              <property name="toolTip"><string>Refresh list of available raster layers</string></property>
+              <property name="maximumWidth"><number>40</number></property>
+             </widget>
+            </item>
+            <item row="0" column="3">
+             <widget class="QPushButton" name="btnBrowseGeoTIFFSource">
+              <property name="text"><string>Browse...</string></property>
+              <property name="maximumWidth"><number>100</number></property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="labelGeoTIFF">
+              <property name="text"><string>File Path:</string></property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QLineEdit" name="txtGeoTIFFPath"/>
+            </item>
+            <item row="1" column="2">
+             <widget class="QPushButton" name="btnBrowseGeoTIFF">
+              <property name="text"><string>Browse...</string></property>
+              <property name="maximumWidth"><number>100</number></property>
+             </widget>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="labelHEIFOutput">
+              <property name="text"><string>Output HEIF:</string></property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QLineEdit" name="txtHEIFOutputPath"/>
+            </item>
+            <item row="2" column="2">
+             <widget class="QPushButton" name="btnBrowseHEIFOutput">
+              <property name="text"><string>Browse...</string></property>
+              <property name="maximumWidth"><number>100</number></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayoutExportSettings">
+            <item><widget class="QLabel" name="labelQuality"><property name="text"><string>Quality:</string></property></widget></item>
+            <item>
+             <widget class="QSpinBox" name="spinQuality">
+              <property name="minimum"><number>1</number></property>
+              <property name="maximum"><number>100</number></property>
+              <property name="value"><number>95</number></property>
+              <property name="toolTip"><string>Image quality (1-100, higher is better)</string></property>
+             </widget>
+            </item>
+            <item><widget class="QLabel" name="labelCompression"><property name="text"><string>Compression:</string></property></widget></item>
+            <item>
+             <widget class="QComboBox" name="comboCompression">
+              <property name="toolTip"><string>HEIF compression codec</string></property>
+              <item><property name="text"><string>hevc</string></property></item>
+              <item><property name="text"><string>av1</string></property></item>
+              <item><property name="text"><string>jpeg2000</string></property></item>
+              <item><property name="text"><string>htj2k</string></property></item>
+              <item><property name="text"><string>uncompressed</string></property></item>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="chkEmbedRDF">
+              <property name="text"><string>Embed RDF Metadata (requires heif-enc)</string></property>
+              <property name="checked"><bool>true</bool></property>
+              <property name="toolTip"><string>Embed TB21 GIMI compliant RDF metadata inside HEIF file. Requires heif-enc.</string></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayoutExportButtons">
+            <item>
+             <spacer name="horizontalSpacerExport">
+              <property name="orientation"><enum>Qt::Horizontal</enum></property>
+              <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnExportToHEIF">
+              <property name="text"><string>Export to TB21 HEIF</string></property>
+              <property name="minimumWidth"><number>150</number></property>
+              <property name="toolTip"><string>Convert GeoTIFF to TB21 GIMI compliant HEIF with embedded RDF metadata</string></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="groupBoxGDALExport">
+         <property name="title"><string>Export to GDAL Format</string></property>
+         <layout class="QVBoxLayout" name="verticalLayoutGDALExport">
+          <item>
+           <layout class="QGridLayout" name="gridLayoutGDALExport">
+            <item row="0" column="0">
+             <widget class="QLabel" name="labelGDALExportSource">
+              <property name="text"><string>Source Layer:</string></property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QComboBox" name="comboGDALExportSource">
+              <property name="toolTip"><string>Select from loaded raster layers or browse for file</string></property>
+              <item><property name="text"><string>Browse for file...</string></property></item>
+             </widget>
+            </item>
+            <item row="0" column="2">
+             <widget class="QPushButton" name="btnRefreshGDALLayers">
+              <property name="text"><string>&#x1F504;</string></property>
+              <property name="toolTip"><string>Refresh list of available raster layers</string></property>
+              <property name="maximumWidth"><number>40</number></property>
+             </widget>
+            </item>
+            <item row="0" column="3">
+             <widget class="QPushButton" name="btnBrowseGDALSource">
+              <property name="text"><string>Browse...</string></property>
+              <property name="maximumWidth"><number>100</number></property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="labelGDALSourcePath">
+              <property name="text"><string>Source Path:</string></property>
+             </widget>
+            </item>
+            <item row="1" column="1" colspan="3">
+             <widget class="QLineEdit" name="txtGDALSourcePath"/>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="labelGDALOutputFormat">
+              <property name="text"><string>Output Format:</string></property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QComboBox" name="cmbGDALOutputFormat">
+              <property name="toolTip"><string>GDAL driver to use for the exported file</string></property>
+              <item><property name="text"><string>GeoTIFF (.tif)</string></property></item>
+              <item><property name="text"><string>Cloud-Optimised GeoTIFF (.tif)</string></property></item>
+              <item><property name="text"><string>JPEG2000 – OpenJPEG (.jp2)</string></property></item>
+              <item><property name="text"><string>PNG (.png)</string></property></item>
+              <item><property name="text"><string>JPEG (.jpg)</string></property></item>
+              <item><property name="text"><string>HFA / ERDAS Imagine (.img)</string></property></item>
+              <item><property name="text"><string>ECW (.ecw)</string></property></item>
+              <item><property name="text"><string>NITF (.ntf)</string></property></item>
+              <item><property name="text"><string>GeoPackage Raster (.gpkg)</string></property></item>
+              <item><property name="text"><string>ENVI (.img / .hdr)</string></property></item>
+              <item><property name="text"><string>VRT (.vrt)</string></property></item>
+              <item><property name="text"><string>NetCDF (.nc)</string></property></item>
+              <item><property name="text"><string>HDF5 (.h5)</string></property></item>
+              <item><property name="text"><string>Zarr (.zarr)</string></property></item>
+              <item><property name="text"><string>MrSID (.sid)</string></property></item>
+             </widget>
+            </item>
+            <item row="2" column="2" colspan="2">
+             <widget class="QLineEdit" name="txtGDALExportOpts">
+              <property name="placeholderText"><string>Creation options, e.g. COMPRESS=DEFLATE TILED=YES</string></property>
+              <property name="toolTip"><string>Space-separated GDAL KEY=VALUE creation options for the selected driver</string></property>
+             </widget>
+            </item>
+            <item row="3" column="0">
+             <widget class="QLabel" name="labelGDALOutput">
+              <property name="text"><string>Output Path:</string></property>
+             </widget>
+            </item>
+            <item row="3" column="1" colspan="2">
+             <widget class="QLineEdit" name="txtGDALOutputPath"/>
+            </item>
+            <item row="3" column="3">
+             <widget class="QPushButton" name="btnBrowseGDALOutput">
+              <property name="text"><string>Browse...</string></property>
+              <property name="maximumWidth"><number>100</number></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayoutGDALExportButtons">
+            <item>
+             <widget class="QCheckBox" name="chkGDALAddToMap">
+              <property name="text"><string>Add result to map canvas</string></property>
+              <property name="checked"><bool>true</bool></property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacerGDALExport">
+              <property name="orientation"><enum>Qt::Horizontal</enum></property>
+              <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnExportGDAL">
+              <property name="text"><string>Export with GDAL</string></property>
+              <property name="minimumWidth"><number>140</number></property>
+              <property name="toolTip"><string>Export the selected source raster to the chosen GDAL format</string></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="verticalSpacerTab3">
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>10</height></size></property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+
     </widget>
    </item>
    <item>
     <widget class="QProgressBar" name="progressBar">
-     <property name="value">
-      <number>0</number>
-     </property>
-     <property name="textVisible">
-      <bool>true</bool>
-     </property>
+     <property name="value"><number>0</number></property>
+     <property name="textVisible"><bool>true</bool></property>
     </widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayoutButtons">
      <item>
       <widget class="QPushButton" name="btnCreatePackage">
-       <property name="text">
-        <string>📦 Create Package (ZIP)</string>
-       </property>
-       <property name="minimumWidth">
-        <number>160</number>
-       </property>
-       <property name="toolTip">
-        <string>Create a ZIP archive with exported GeoTIFF, JSON provenance, and RDF/TTL metadata</string>
-       </property>
-       <property name="enabled">
-        <bool>false</bool>
-       </property>
+       <property name="text"><string>&#x1F4E6; Create Package (ZIP)</string></property>
+       <property name="minimumWidth"><number>160</number></property>
+       <property name="toolTip"><string>Create a ZIP archive with exported GeoTIFF, JSON provenance, and RDF/TTL metadata</string></property>
+       <property name="enabled"><bool>false</bool></property>
       </widget>
      </item>
      <item>
       <spacer name="horizontalSpacer">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
+       <property name="orientation"><enum>Qt::Horizontal</enum></property>
+       <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
       </spacer>
      </item>
      <item>
       <widget class="QPushButton" name="btnClose">
-       <property name="text">
-        <string>Close</string>
-       </property>
-       <property name="minimumWidth">
-        <number>100</number>
-       </property>
-       <property name="toolTip">
-        <string>Close the dialog</string>
-       </property>
+       <property name="text"><string>Close</string></property>
+       <property name="minimumWidth"><number>100</number></property>
+       <property name="toolTip"><string>Close the dialog</string></property>
       </widget>
      </item>
     </layout>

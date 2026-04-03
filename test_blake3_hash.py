@@ -117,14 +117,48 @@ def test_blake3_hash():
 def main():
     """Main test runner"""
     success = test_blake3_hash()
-    
+
+    # --- Codesprint January 2026 verification ---
+    # Known hashes from gimi-test-data/codesprint-january2026  _provenance.json
+    CODESPRINT_DATA_DIR = (
+        "/Users/luciocolaiacomo/4113Eng-wfs/gimi-test-data/codesprint-january2026"
+    )
+    KNOWN_HASHES = {
+        "tb21-single-image-hevc-internal-rdf_georeferenced.tif":
+            "1e209316abf91a36f0b8c6fcae6825db642e465d2d140bdf8593d2b9db4c29c326c7",
+        "test20_georeferenced.tif":
+            "1e20bd4c21b6d4b63564a49e65de4e4b971c2e876d922736d8352595594ae64e0759",
+    }
+
+    if os.path.isdir(CODESPRINT_DATA_DIR):
+        print("\n" + "=" * 80)
+        print("Codesprint January 2026 — hash verification")
+        print("=" * 80)
+        processor = HEIFProcessor()
+        for filename, expected in KNOWN_HASHES.items():
+            fpath = os.path.join(CODESPRINT_DATA_DIR, filename)
+            if not os.path.exists(fpath):
+                print(f"⚠️  Skipped (file not found): {filename}")
+                continue
+            computed, algo = processor.calculate_file_hash(fpath)
+            if computed == expected:
+                print(f"✓  {filename}")
+                print(f"    {algo}: {computed[:24]}…")
+            else:
+                print(f"❌  {filename}")
+                print(f"    expected: {expected[:24]}…")
+                print(f"    computed: {computed[:24]}…")
+                success = False
+    else:
+        print(f"\n⚠️  Codesprint data directory not found, skipping known-hash checks:\n    {CODESPRINT_DATA_DIR}")
+
     print("\n" + "=" * 80)
     if success:
         print("✅ TEST PASSED: BLAKE3 hash calculation working!")
     else:
         print("❌ TEST FAILED: Check errors above")
     print("=" * 80)
-    
+
     return 0 if success else 1
 
 

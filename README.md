@@ -1,8 +1,10 @@
-# HEIF/TTL Imagery Importer for QGIS
+# General Raster Importer for QGIS
 
-A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files and uses TTL (Turtle RDF) metadata to automatically georeference them using Ground Control Points (GCPs). Includes full **ISO 19115-4 imagery metadata** extraction and quality reporting.
+A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files and uses TTL (Turtle RDF) metadata to automatically georeference them using Ground Control Points (GCPs). Includes full **ISO 19115-4 imagery metadata** extraction and quality reporting. **NEW**: Export GeoTIFF to TB21 GIMI HEIF format with embedded RDF metadata.
 
 ## Features
+
+### Import Capabilities
 
 - **HEIF Image Support**: Import modern HEIF/HEIC image files with full ISO/IEC 23008-12 compliance
 - **HEIF Structure Analysis**: Display complete file structure including boxes, metadata, images, thumbnails, and embedded data
@@ -13,6 +15,18 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 - **JPEG2000 Output**: Optional export as JPEG2000 (.jp2) with better compression and native QGIS support
 - **Image Warping**: Optional warping for proper display in geographic coordinates
 - **Orthorectification**: Advanced polynomial transformation options (1st-3rd order, TPS)
+
+### Export Capabilities (NEW)
+
+- **TB21 GIMI Export**: Export GeoTIFF to TB21 GIMI compliant HEIF with embedded RDF metadata
+- **GCP Extraction**: Automatically extract Ground Control Points from GeoTIFF geotransform or GCPs
+- **RDF Generation**: Generate TB21 GIMI compliant Turtle RDF following Common Core Ontologies
+- **RDF Embedding**: Use `heif-enc` with SAI (Sample Auxiliary Information) to embed metadata
+- **Multiple Codecs**: Support for HEVC, AV1, and uncompressed formats
+- **Fallback Mode**: Creates external TTL when `heif-enc` not available
+
+### Quality & Metadata
+
 - **ISO 19115-4 Metadata**: Automatic extraction of imagery-specific metadata quality elements
   - Radiometric accuracy
   - Sensor quality assessment
@@ -39,17 +53,20 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
    pip install pillow pillow-heif gdal blake3
    ```
 
-3. **Optional: libheif command-line tools** (for advanced features):
+3. **Optional: libheif command-line tools** (for TB21 GIMI export with embedded RDF):
    - Download from: https://github.com/strukturag/libheif
+   - Includes `heif-enc` for creating TB21 GIMI compliant HEIF files
    - Build instructions:
      ```bash
      git clone https://github.com/strukturag/libheif.git
      cd libheif
      mkdir build && cd build
-     cmake .. -DCMAKE_BUILD_TYPE=Release
+     cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_EXPERIMENTAL_FEATURES=on
      make
      sudo make install
      ```
+   > **Note:** `-DENABLE_EXPERIMENTAL_FEATURES=on` is required to enable `tili` tiling mode
+   > and the `heif-enc` RDF sidecar feature. Without it these features are compiled out.
    - Provides `heif-enc` and `heif-convert` tools for:
      - Advanced tiling modes (grid, tili, unci)
      - Uncompressed codec with signed integer support
@@ -195,6 +212,60 @@ EMBEDDED RDF METADATA:
 
 5. **Import**: Click **OK** to process
 
+## Exporting GeoTIFF to TB21 GIMI HEIF
+
+### Overview
+
+The plugin now supports **bidirectional workflow** for TB21 GIMI format:
+
+- **Import**: TB21 HEIF (with internal RDF) → GeoTIFF ✅
+- **Export**: GeoTIFF → TB21 HEIF (with internal RDF) ✅ **NEW**
+
+### Using the Python API
+
+```python
+from heif_processor import HEIFProcessor
+
+processor = HEIFProcessor()
+
+# Export GeoTIFF to TB21 HEIF with embedded RDF
+success, metadata = processor.export_geotiff_to_tb21_heif(
+    geotiff_path='input.tif',
+    output_heif_path='output_tb21.heif',
+    quality=95,
+    compression='hevc',  # Options: 'hevc', 'av1', 'unci'
+    embed_rdf=True
+)
+
+if success:
+    print(f"✅ Exported {metadata['gcp_count']} GCPs")
+    print(f"RDF: {metadata['rdf_size']} bytes")
+```
+
+### Using the Test Script
+
+```bash
+python test_geotiff_export.py input.tif output_tb21.heif
+```
+
+### Export Options
+
+- **quality**: 1-100 (default: 95)
+- **compression**: `hevc` (default), `av1`, `unci` (uncompressed)
+- **embed_rdf**: `True` (requires `heif-enc` for TB21 GIMI compliance)
+
+### Requirements
+
+**For full TB21 GIMI compliance** (embedded RDF), install `heif-enc`:
+
+```bash
+brew install libheif  # macOS
+```
+
+Without `heif-enc`, RDF is saved as external `.ttl` file.
+
+See [TB21_EXPORT_FEATURE.md](TB21_EXPORT_FEATURE.md) for complete documentation.
+
 ### TTL Metadata Format
 
 The plugin expects TTL files with the following RDF structure:
@@ -312,11 +383,12 @@ The plugin automatically detects and handles three tiling modes defined in the H
    - Uses `grid` item reference
    - Supported by all HEIF decoders
 
-2. **Tili Mode** (libheif-specific):
+2. **Tili Mode** (experimental — requires `-DENABLE_EXPERIMENTAL_FEATURES=on`):
    - Efficient tiling with minimal overhead
    - Practically unlimited tiles
-   - Requires libheif decoder
+   - Requires libheif decoder built with experimental features
    - Optimized for very large images
+   - `tili` has been proposed to MPEG and is expected to be included in **ISO 23008-12, Amd-2** (approval expected end of April 2026). The box syntax has changed during the standardization process. libheif currently implements the **old pre-standard format**; it will switch to the new official syntax once the amendment is approved. That file-format change will be **incompatible** — files encoded with the current experimental `tili` will not be readable by future decoders using the standard syntax. For this reason `tili` remains behind the `EXPERIMENTAL` flag until the standard is finalized.
 
 3. **Unci Mode** (ISO 23001-17):
    - Uses uncompressed codec internal tiling
@@ -530,6 +602,51 @@ Try different resampling methods:
 - **GDAL/OGR**: Geospatial transformations
 - **blake3**: Cryptographic hashing for interoperability (falls back to hashlib.sha256 if unavailable)
 
+### pillow-heif Tile Access API
+
+The [pillow-heif](https://github.com/bigcat88/pillow_heif) maintainer is currently working on adding support for the **libheif tile access API**. Once available, the plugin will use this path for more reliable tiled-image decoding (grid, tili, unci modes) and will replace the current pillow-based workarounds with direct tile-level access.
+
+### Python Bindings for libheif — SWIG Implementation
+
+The current implementation uses a mixture of **pillow-heif**, **libheif command-line tools** (`heif-enc`, `heif-dec`, `heif-info`), **GDAL**, and **ad-hoc byte/string scanning**. pillow-heif only exposes a small subset of the full libheif feature set, CLI tools introduce subprocess overhead, and byte/string scanning is fragile (false positives/negatives — see implementation notes in `heif_processor.py`).
+
+The clean path is to call the **libheif C API directly** via a [SWIG](https://www.swig.org/)-generated Python binding.  The binding lives in `libheif_binding/` and is already wired into `heif_processor.py`.
+
+#### What the binding provides
+
+| C API function | Python surface | Used for |
+|---|---|---|
+| `heif_context_alloc/free/read_from_file` | `HeifContext.from_file()` | Open any HEIF/AVIF/HEIC file |
+| `heif_context_get_list_of_top_level_image_IDs` | `ctx.top_level_image_ids()` | Enumerate images |
+| `heif_context_get_image_handle` | `ctx.get_image_handle(id)` | Per-image inspection |
+| `heif_image_handle_get_number_of_metadata_blocks` + `get_list_of_metadata_block_IDs` | `handle.metadata_blocks()` | Iterate embedded items |
+| `heif_image_handle_get_metadata_content_type` | `block.content_type` | MIME type of each item |
+| `heif_image_handle_get_metadata` | `block.read()` | Read raw bytes of any item |
+| `heif_image_handle_get_number_of_tiles` | `handle.tile_count` | Confirm tiling (libheif ≥ 1.17) |
+
+`has_internal_rdf()` and `extract_internal_rdf()` now use `HeifContext.find_rdf_metadata()` which inspects metadata block MIME content-types (`text/turtle`, `application/rdf+xml`) — no byte scanning.  The byte-scan path is retained only as a last-resort fallback when the binding has not been compiled.
+
+`detect_tiling_mode()` uses `HeifContext.detect_tiling_mode()`.  Full tiling-type resolution (grid / tili / unci) still falls back to heuristics because `heif_image_handle_get_item_type()` is not yet in libheif's stable public header.  A TODO is recorded in both the SWIG interface and `__init__.py` to wire it in once it is available.
+
+#### Build the binding
+
+```bash
+# Prerequisites
+brew install swig libheif       # macOS
+# apt install swig libheif-dev  # Debian/Ubuntu
+
+cd libheif_binding
+./build.sh                      # runs: python setup.py build_ext --inplace
+```
+
+After a successful build, `libheif_core.py` and `_libheif_core*.so` appear in `libheif_binding/` and are picked up automatically by `heif_processor.py`.  If the build has not been run, the plugin degrades gracefully to the byte-scan fallback.
+
+#### Future work
+
+- Expose `heif_image_handle_get_item_type()` once libheif adds it to the public header → allows unambiguous grid / tili / unci detection without any heuristics
+- `display_heif_structure()`: rewrite using C API box traversal; currently uses ad-hoc parsing (see `show_heif_structure.py`)
+- Consider publishing the binding as a standalone `pyheif-native` package for the broader libheif ecosystem
+
 ### File Structure
 
 ```
@@ -543,6 +660,24 @@ heif_ttl_importer/
 ├── heif_processor.py             # HEIF to GeoTIFF converter
 ├── iso19115_4_metadata.py        # ISO 19115-4 metadata extractor
 ├── show_heif_structure.py        # Standalone HEIF structure analyzer
+├── stac_converter.py             # STAC item/collection generation
+├── osm_fetcher.py                # OpenStreetMap feature fetcher
+├── icon.png                      # Plugin toolbar icon
+├── pb_tool.cfg                   # pb_tool deployment configuration
+├── deploy.sh                     # Deployment helper script
+├── QUICK_REFERENCE.py            # Quick-reference code snippets
+├── libheif_binding/              # SWIG-generated libheif C API binding
+│   ├── __init__.py               #   Pythonic HeifContext / ImageHandle / MetadataBlock
+│   ├── libheif_core.i            #   SWIG interface file (hand-written)
+│   ├── setup.py                  #   setuptools build script
+│   └── build.sh                  #   One-shot build helper
+├── test_heif_structure.py        # Tests for HEIF structure analysis
+├── test_geotiff_export.py        # Tests for GeoTIFF → TB21 HEIF export
+├── test_internal_rdf.py          # Tests for internal RDF extraction
+├── test_rdf_parsing.py           # Tests for TTL/RDF parsing
+├── test_unci_support.py          # Tests for uncompressed HEIF codec
+├── test_heif_to_jp2.py           # Tests for HEIF → JPEG2000 export
+├── test_blake3_hash.py           # Tests for BLAKE3 hashing
 └── README.md                     # This file
 ```
 
@@ -556,7 +691,17 @@ heif_ttl_importer/
 
 ## License
 
-[Add your license here]
+Copyright (C) 2026 4113Eng-wfs
+
+This plugin is released under the **GNU General Public License v3.0 or later** (GPL-3.0-or-later).
+
+You are free to use, study, modify and distribute it under GPL-3.0-or-later terms.
+See the [LICENSE](LICENSE) file or <https://www.gnu.org/licenses/gpl-3.0.html> for the full text.
+
+> **Why GPL-3.0 and not Creative Commons?**  
+> Creative Commons licenses are designed for creative works (text, art, media) — the CC organisation
+> explicitly recommends against using them for software. This plugin uses PyQt5 (GPL-3.0) and
+> libheif (LGPL-3.0), which legally require a GPL-3.0-compatible license for distribution.
 
 ## Contributing
 

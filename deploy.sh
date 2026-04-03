@@ -29,12 +29,31 @@ cp -v heif_ttl_dialog_base.ui "$TARGET_DIR/"
 cp -v ttl_parser.py "$TARGET_DIR/"
 cp -v heif_processor.py "$TARGET_DIR/"
 cp -v iso19115_4_metadata.py "$TARGET_DIR/"
+cp -v stac_converter.py "$TARGET_DIR/"
+cp -v osm_fetcher.py "$TARGET_DIR/"
 cp -v metadata.txt "$TARGET_DIR/"
 cp -v README.md "$TARGET_DIR/"
+cp -v LICENSE "$TARGET_DIR/"
 
 # Copy icon if exists
 if [ -f "icon.png" ]; then
     cp -v icon.png "$TARGET_DIR/"
+fi
+
+# Copy SWIG binding package (compiled .so + Python wrapper)
+if [ -d "libheif_binding" ]; then
+    echo "Copying libheif_binding..."
+    mkdir -p "$TARGET_DIR/libheif_binding"
+    cp -v libheif_binding/__init__.py "$TARGET_DIR/libheif_binding/"
+    # Copy compiled extension if present
+    if ls libheif_binding/_libheif_core*.so 2>/dev/null | grep -q .; then
+        cp -v libheif_binding/_libheif_core*.so "$TARGET_DIR/libheif_binding/"
+        cp -v libheif_binding/libheif_core.py  "$TARGET_DIR/libheif_binding/"
+        echo "  ✓ SWIG extension (.so) included"
+    else
+        echo "  ⚠ SWIG extension not compiled — heif_processor.py will fall back to byte-scan."
+        echo "    To build: cd libheif_binding && ./build.sh"
+    fi
 fi
 
 echo ""

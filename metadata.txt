@@ -1,17 +1,18 @@
 [general]
-name=HEIF/TTL Imagery Importer
+name=General Raster Importer
 qgisMinimumVersion=3.0
-description=Import HEIF imagery files with TTL metadata for georeferencing using Ground Control Points
-version=1.0.0
+description=Import any GDAL-readable raster (HEIF, GeoTIFF, JPEG2000, ECW, HFA, NITF, PNG, JPEG …) with optional TTL/RDF metadata for GCP-based georeferencing, and export to any GDAL-writable format
+version=2.0.0
 author=4113Eng-wfs
 email=info@example.com
+license=GPL-3.0-or-later
 
-about=This plugin imports HEIF (High Efficiency Image Format) imagery and uses TTL (Turtle RDF) metadata files to extract Ground Control Points for automatic georeferencing. It parses image-to-ground coordinate correspondences and creates properly georeferenced raster layers.
+about=General Raster Importer accepts any raster format supported by GDAL. It uses TTL (Turtle RDF) or embedded RDF metadata to extract Ground Control Points for automatic georeferencing and exports the result in any GDAL-writable format (GeoTIFF, COG, JPEG2000, PNG, JPEG, HFA, ECW, NITF, GeoPackage Raster, TB21 GIMI HEIF …).
 
 tracker=https://github.com/yourrepo/issues
 repository=https://github.com/yourrepo
 
-tags=imagery,heif,rdf,ttl,georeferencing,gcp,metadata
+tags=imagery,raster,gdal,heif,geotiff,jpeg2000,rdf,ttl,georeferencing,gcp,metadata,export
 
 category=Raster
 icon=icon.png

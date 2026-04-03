@@ -1,6 +1,9 @@
+# SPDX-FileCopyrightText: 2026 4113Eng-wfs
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
-HEIF/TTL Imagery Importer
-A QGIS plugin for importing HEIF imagery with TTL metadata georeferencing
+General Raster Importer
+A QGIS plugin for importing any GDAL-readable raster and exporting to any GDAL-writable format,
+with optional TTL/RDF metadata georeferencing support.
 """
 
 

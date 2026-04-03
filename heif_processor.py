@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 4113Eng-wfs
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
 HEIF Image Processor - Converts HEIF images to GeoTIFF format
 """
@@ -39,6 +41,16 @@ except ImportError:
         ISO19115_4_AVAILABLE = True
     except ImportError:
         ISO19115_4_AVAILABLE = False
+
+# Import the SWIG-generated libheif binding (optional — degrades gracefully)
+try:
+    from .libheif_binding import HeifContext as _HeifContext, SWIG_BINDING_AVAILABLE as _SWIG_OK
+except ImportError:
+    try:
+        from libheif_binding import HeifContext as _HeifContext, SWIG_BINDING_AVAILABLE as _SWIG_OK  # type: ignore[no-redef]
+    except ImportError:
+        _HeifContext = None  # type: ignore[assignment,misc]
+        _SWIG_OK = False
 
 
 class HEIFProcessor:
@@ -175,40 +187,80 @@ class HEIFProcessor:
     def detect_tiling_mode(self, heif_path: str) -> Optional[str]:
         """
         Detect the tiling mode used in a HEIF file.
-        
+
         Tiling modes from libheif:
         - 'grid': Default method with best decoder compatibility (max 65535 tiles)
-        - 'tili': Efficient tiling with little overhead (unlimited tiles, libheif only)
+        - 'tili': Efficient tiling with little overhead (unlimited tiles, requires
+                  libheif built with -DENABLE_EXPERIMENTAL_FEATURES=on; pending
+                  inclusion in ISO 23008-12, Amd-2)
         - 'unci': ISO 23001-17 uncompressed codec internal tiling
-        
+
         See: https://github.com/strukturag/libheif/wiki/heif%E2%80%90enc-Command-Line-Tool#tiling-modes
-        
+
+        IMPORTANT — implementation note
+        ---------------------------------
+        The clean approach is to use the libheif C API:
+
+            heif_context_get_list_of_item_IDs(ctx, ids, count)
+
+        and inspect each item's type (4-byte box type) via
+        ``heif_context_get_image_handle()`` / ``heif_image_handle_get_item_type()``.
+        The byte-scan fallback below is **fragile**: the four-byte strings 'grid',
+        'tili', or 'unci' can legitimately appear anywhere in compressed image data,
+        leading to false positives.  Conversely they may be stored in an ISO Base
+        Media File Format box that is not in the first 16 KB, causing false negatives.
+
+        Once pillow-heif exposes the libheif tile access API (in progress by the
+        pillow-heif maintainer), this method should be rewritten to use that API.
+        For now, ctypes bindings to libheif are used when available; keyword-scan
+        is retained only as a last resort with a logged warning.
+
         Args:
             heif_path: Path to HEIF file
-            
+
         Returns:
             Tiling mode string ('grid', 'tili', 'unci') or None if not tiled
         """
+        # ------------------------------------------------------------------
+        # Preferred path: SWIG binding → libheif C API
+        # ------------------------------------------------------------------
+        if _SWIG_OK and _HeifContext is not None:
+            try:
+                with _HeifContext.from_file(heif_path) as ctx:
+                    mode = ctx.detect_tiling_mode()
+                if mode is not None:
+                    self.tiling_mode = mode
+                    return mode
+                # mode == None means no tiling detected via C API
+                return None
+            except Exception as _swig_err:
+                print(f"[detect_tiling_mode] SWIG binding error: {_swig_err}")
+
+        # ------------------------------------------------------------------
+        # Last-resort: byte-scan (fragile — false-positive/negative risk)
+        # WARNING: 4-byte strings may appear in compressed image data.
+        # Build libheif_binding (./libheif_binding/build.sh) to avoid this path.
+        # ------------------------------------------------------------------
         try:
             with open(heif_path, 'rb') as f:
-                data = f.read(16384)  # Read first 16KB for box detection
-                
-                # Check for grid box (iref 'dimg' reference)
-                if b'grid' in data:
-                    self.tiling_mode = 'grid'
-                    return 'grid'
-                
-                # Check for tili box (libheif-specific)
-                if b'tili' in data:
-                    self.tiling_mode = 'tili'
-                    return 'tili'
-                
-                # Check for unci box (uncompressed codec)
-                if b'unci' in data:
-                    self.tiling_mode = 'unci'
-                    return 'unci'
-                
-                return None
+                data = f.read(16384)  # Read first 16 KB
+
+            # Scan for 4-byte box-type codes at ISOBMFF box boundaries would
+            # require full box parsing.  This naive search is a heuristic only.
+            if b'grid' in data:
+                print("[detect_tiling_mode] WARNING: 'grid' found via byte-scan (heuristic)")
+                self.tiling_mode = 'grid'
+                return 'grid'
+            if b'tili' in data:
+                print("[detect_tiling_mode] WARNING: 'tili' found via byte-scan (heuristic)")
+                self.tiling_mode = 'tili'
+                return 'tili'
+            if b'unci' in data:
+                print("[detect_tiling_mode] WARNING: 'unci' found via byte-scan (heuristic)")
+                self.tiling_mode = 'unci'
+                return 'unci'
+
+            return None
         except Exception as e:
             print(f"Error detecting tiling mode: {e}")
             return None
@@ -216,23 +268,58 @@ class HEIFProcessor:
     def has_internal_rdf(self, heif_path: str) -> bool:
         """
         Check if HEIF file has internal RDF/XMP metadata.
-        
+
         Supports both XML/RDF and Turtle formats (TB21 GIMI).
-        
+
+        IMPLEMENTATION NOTE
+        -------------------
+        The authoritative approach is to iterate over the ISO BMFF item list via
+        the libheif C API::
+
+            heif_context_get_list_of_item_IDs(ctx, ids, count)
+
+        and inspect each item for a MIME content-type of ``text/turtle`` or
+        ``application/rdf+xml``.  The command-line equivalent is::
+
+            heif-dec --extract-mime-item text/turtle input.heif rdf_out.ttl
+            # (--extract-mime-item was added in a recent libheif release)
+
+        The byte-scan below is a fallback: it searches the raw file bytes for
+        known RDF markers, which may produce false positives if those byte
+        sequences appear in compressed media data.
+
         Args:
             heif_path: Path to HEIF file
-            
+
         Returns:
             True if internal RDF metadata found, False otherwise
         """
+        # ------------------------------------------------------------------
+        # Preferred path: SWIG binding → libheif C API metadata block inspection
+        # ------------------------------------------------------------------
+        if _SWIG_OK and _HeifContext is not None:
+            try:
+                with _HeifContext.from_file(heif_path) as ctx:
+                    _data, fmt = ctx.find_rdf_metadata()
+                if fmt is not None:
+                    self.internal_rdf_format = fmt
+                    return True
+                # Binding found no RDF — trust the API result
+                return False
+            except Exception as _swig_err:
+                print(f"[has_internal_rdf] SWIG binding error: {_swig_err}")
+                # Fall through to byte-scan below
+
+        # ------------------------------------------------------------------
+        # Fallback: byte-scan (fragile — false-positive/negative risk)
+        # Build libheif_binding (./libheif_binding/build.sh) to avoid this path.
+        # ------------------------------------------------------------------
         try:
             with open(heif_path, 'rb') as f:
                 data = f.read()
-                # Check for XML/RDF format or XMP
                 if b'<rdf:RDF' in data or b'<?xpacket' in data:
                     self.internal_rdf_format = 'xml'
                     return True
-                # Check for Turtle format RDF (TB21 GIMI files)
                 if b'@prefix rdf:' in data or b'@prefix rdfs:' in data:
                     self.internal_rdf_format = 'turtle'
                     return True
@@ -244,17 +331,39 @@ class HEIFProcessor:
     def extract_internal_rdf(self, heif_path: str) -> Optional[str]:
         """
         Extract internal RDF metadata from HEIF file.
-        
+
         Args:
             heif_path: Path to HEIF file
-            
+
         Returns:
             RDF content as string, or None if not found
         """
+        # ------------------------------------------------------------------
+        # Preferred path: SWIG binding → libheif C API metadata block read
+        # ------------------------------------------------------------------
+        if _SWIG_OK and _HeifContext is not None:
+            try:
+                with _HeifContext.from_file(heif_path) as ctx:
+                    raw, fmt = ctx.find_rdf_metadata()
+                if raw is not None and fmt is not None:
+                    text = raw.decode('utf-8', errors='ignore')
+                    self.internal_rdf = text
+                    self.internal_rdf_format = fmt
+                    print(f"[extract_internal_rdf] SWIG binding: {len(text)} chars ({fmt})")
+                    return self.internal_rdf
+                return None
+            except Exception as _swig_err:
+                print(f"[extract_internal_rdf] SWIG binding error: {_swig_err}")
+                # Fall through to byte-scan below
+
+        # ------------------------------------------------------------------
+        # Fallback: byte-scan (fragile — false-positive/negative risk)
+        # Build libheif_binding (./libheif_binding/build.sh) to avoid this path.
+        # ------------------------------------------------------------------
         try:
             with open(heif_path, 'rb') as f:
                 data = f.read()
-                
+
                 # Extract XML/RDF format
                 if b'<rdf:RDF' in data:
                     idx = data.find(b'<rdf:RDF')
@@ -264,18 +373,15 @@ class HEIFProcessor:
                         self.internal_rdf = rdf_data.decode('utf-8', errors='ignore')
                         self.internal_rdf_format = 'xml'
                         return self.internal_rdf
-                
+
                 # Extract Turtle format RDF (TB21 GIMI files)
                 elif b'@prefix rdf:' in data or b'@prefix rdfs:' in data:
                     idx = data.find(b'@prefix')
                     # Extract up to 100KB to ensure all GCP data is captured
                     end_idx = min(idx + 100000, len(data))
                     chunk = data[idx:end_idx]
-                    
                     try:
                         turtle_text = chunk.decode('utf-8', errors='ignore')
-                        # For TB21 GIMI files, we need ALL the RDF content to extract GCPs
-                        # Don't truncate prematurely - GCPs can be scattered throughout
                         self.internal_rdf = turtle_text
                         self.internal_rdf_format = 'turtle'
                         print(f"Extracted {len(self.internal_rdf)} characters of Turtle RDF")
@@ -283,7 +389,7 @@ class HEIFProcessor:
                     except Exception as e:
                         print(f"Error decoding Turtle RDF: {e}")
                         return None
-                
+
                 # Check for XMP packet if RDF not found
                 if b'<?xpacket' in data:
                     idx = data.find(b'<?xpacket')
@@ -293,26 +399,596 @@ class HEIFProcessor:
                         self.internal_rdf = xmp_data.decode('utf-8', errors='ignore')
                         self.internal_rdf_format = 'xmp'
                         return self.internal_rdf
-                
+
                 return None
-                
+
         except Exception as e:
             print(f"Error extracting internal RDF: {e}")
             return None
     
+    # ------------------------------------------------------------------
+    # Format probing and multi-format support
+    # ------------------------------------------------------------------
+
+    # Mapping GDAL short driver name → display name
+    _GDAL_FORMAT_FRIENDLY = {
+        'GTiff':        'GeoTIFF',
+        'JP2OpenJPEG':  'JPEG2000 (OpenJPEG)',
+        'JP2KAK':       'JPEG2000 (Kakadu)',
+        'JP2ECW':       'JPEG2000 (ECW)',
+        'JPEG2000':     'JPEG2000',
+        'PNG':          'PNG',
+        'JPEG':         'JPEG',
+        'BMP':          'BMP',
+        'HFA':          'ERDAS Imagine (.img)',
+        'VRT':          'GDAL Virtual (.vrt)',
+        'ECW':          'ECW',
+        'MrSID':        'MrSID',
+        'NITF':         'NITF',
+        'DTED':         'DTED',
+        'GeoRaster':    'GeoRaster',
+    }
+
+    # World-file extensions by GDAL driver
+    _WORLDFILE_EXTS = {
+        'GTiff':        ['.tfw', '.tifw', '.wld'],
+        'PNG':          ['.pgw', '.pngw', '.wld'],
+        'JPEG':         ['.jgw', '.jpgw', '.wld'],
+        'JP2OpenJPEG':  ['.j2w', '.jp2w', '.wld'],
+        'JP2KAK':       ['.j2w', '.jp2w', '.wld'],
+        'JP2ECW':       ['.j2w', '.jp2w', '.wld'],
+        'JPEG2000':     ['.j2w', '.jp2w', '.wld'],
+        'BMP':          ['.bpw', '.bmpw', '.wld'],
+    }
+
+    def export_gdal(self, src_path: str, dst_path: str, driver: str,
+                    creation_options: Optional[List[str]] = None) -> str:
+        """Export *src_path* to *dst_path* using the given GDAL driver.
+
+        Supports any GDAL-writable raster driver (GTiff, COG, JP2OpenJPEG,
+        PNG, JPEG, HFA, ECW, NITF, GPKG, ENVI, VRT, netCDF, HDF5, Zarr …).
+
+        Args:
+            src_path:         Absolute path to the source raster (any GDAL-readable format).
+            dst_path:         Absolute path for the output file.
+            driver:           GDAL short driver name, e.g. ``'GTiff'``, ``'COG'``, ``'JP2OpenJPEG'``.
+            creation_options: List of GDAL creation-option strings in ``KEY=VALUE`` form.
+                              ``None`` uses sensible defaults per driver.
+
+        Returns:
+            *dst_path* on success.
+
+        Raises:
+            RuntimeError: if GDAL cannot open *src_path* or translate to the target.
+        """
+        creation_options = creation_options or []
+
+        # Per-driver sensible defaults when caller provides none
+        _DEFAULTS: dict = {
+            "GTiff":       ["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"],
+            "COG":         ["COMPRESS=DEFLATE", "OVERVIEW_RESAMPLING=NEAREST"],
+            "JP2OpenJPEG": [],
+            "JPEG":        ["QUALITY=95"],
+            "GPKG":        ["TILE_FORMAT=PNG"],
+        }
+        if not creation_options:
+            creation_options = _DEFAULTS.get(driver, [])
+
+        src_ds = gdal.Open(src_path, gdal.GA_ReadOnly)
+        if src_ds is None:
+            raise RuntimeError(f"GDAL could not open source file: {src_path}")
+
+        # For HEIF inputs not readable by GDAL, fall back to pillow + GDAL mem driver
+        if src_ds is None and HEIF_AVAILABLE:
+            src_ds = self._heif_to_gdal_mem(src_path)
+
+        if src_ds is None:
+            raise RuntimeError(f"Cannot read source raster: {src_path}")
+
+        os.makedirs(os.path.dirname(os.path.abspath(dst_path)), exist_ok=True)
+
+        # Use gdal.Translate for format conversion
+        translate_opts = gdal.TranslateOptions(
+            format=driver,
+            creationOptions=creation_options,
+        )
+        result = gdal.Translate(dst_path, src_ds, options=translate_opts)
+        src_ds = None  # close
+        if result is None:
+            raise RuntimeError(
+                f"GDAL Translate failed for driver '{driver}'.\n"
+                f"Check that the driver is compiled into your GDAL build and that\n"
+                f"the creation options are valid: {creation_options}"
+            )
+        result = None  # flush & close
+        print(f"[export_gdal] {src_path} → {dst_path}  (driver={driver})")
+        return dst_path
+
+    def _heif_to_gdal_mem(self, heif_path: str):
+        """Convert a HEIF file to an in-memory GDAL dataset via pillow-heif.
+
+        Used as a fallback when the installed GDAL does not include a HEIF driver.
+
+        Returns:
+            A GDAL in-memory Dataset, or None on failure.
+        """
+        if not HEIF_AVAILABLE:
+            return None
+        try:
+            import numpy as np
+            import pillow_heif as _ph
+            hf = _ph.open_heif(heif_path)
+            if len(hf) == 0:
+                return None
+            img = hf[0]
+            arr = np.frombuffer(img.data, dtype=np.uint8)
+            w, h = img.size
+            bands = len(img.mode)
+            arr = arr.reshape(h, w, bands)
+
+            mem_driver = gdal.GetDriverByName("MEM")
+            ds = mem_driver.Create("", w, h, bands, gdal.GDT_Byte)
+            for b in range(bands):
+                ds.GetRasterBand(b + 1).WriteArray(arr[:, :, b])
+            return ds
+        except Exception as e:
+            print(f"[_heif_to_gdal_mem] {e}")
+            return None
+
+    def probe_raster_format(self, path: str) -> dict:
+        """
+        Probe *path* to determine its raster format and georeferencing status.
+        Uses GDAL IdentifyDriver as the primary mechanism, with a HEIF binary-
+        scan fallback for files not recognised by GDAL (GDAL may lack the HEIF
+        driver on some installs).
+
+        Returns a dict with keys:
+            path, format_name, driver_name, is_heif, is_gdal_readable,
+            is_geo_enabled, geotransform_valid, has_gcps, gcp_count,
+            crs_wkt, crs_epsg, width, height, band_count,
+            available_geo_sources   (list[dict])
+        """
+        result: dict = {
+            'path':               path,
+            'format_name':        'Unknown',
+            'driver_name':        '',
+            'is_heif':            False,
+            'is_gdal_readable':   False,
+            'is_geo_enabled':     False,
+            'geotransform_valid': False,
+            'has_gcps':           False,
+            'gcp_count':          0,
+            'crs_wkt':            None,
+            'crs_epsg':           None,
+            'width':              0,
+            'height':             0,
+            'band_count':         0,
+            'available_geo_sources': [],
+        }
+
+        if not os.path.exists(path):
+            return result
+
+        # ---- Step 1: try GDAL IdentifyDriver ----
+        gdal.PushErrorHandler('CPLQuietErrorHandler')
+        try:
+            drv = gdal.IdentifyDriver(path)
+            if drv is not None:
+                short_name = drv.ShortName
+                result['driver_name']      = short_name
+                result['format_name']      = self._GDAL_FORMAT_FRIENDLY.get(short_name, short_name)
+                result['is_gdal_readable'] = True
+                result['is_heif']          = False  # GDAL JP2/TIFF ≠ HEIF
+
+                # Open with GDAL to read spatial metadata
+                ds = gdal.Open(path, gdal.GA_ReadOnly)
+                if ds is not None:
+                    result['width']      = ds.RasterXSize
+                    result['height']     = ds.RasterYSize
+                    result['band_count'] = ds.RasterCount
+
+                    # Check geotransform
+                    gt = ds.GetGeoTransform()
+                    identity = (0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+                    gt_valid = (gt is not None and gt != identity
+                                and not all(v == 0 for v in gt))
+                    result['geotransform_valid'] = gt_valid
+
+                    # Check GCPs
+                    gcps = ds.GetGCPs()
+                    result['has_gcps']  = bool(gcps)
+                    result['gcp_count'] = len(gcps) if gcps else 0
+
+                    # CRS
+                    proj = ds.GetProjection() or (ds.GetGCPProjection() if gcps else None)
+                    if proj:
+                        result['crs_wkt'] = proj
+                        srs = osr.SpatialReference()
+                        srs.ImportFromWkt(proj)
+                        srs.AutoIdentifyEPSG()
+                        code = srs.GetAuthorityCode('PROJCS') or srs.GetAuthorityCode('GEOGCS')
+                        if code:
+                            try:
+                                result['crs_epsg'] = int(code)
+                            except ValueError:
+                                pass
+
+                    result['is_geo_enabled'] = gt_valid or bool(gcps)
+                    ds = None
+        except Exception:
+            pass
+        finally:
+            gdal.PopErrorHandler()
+
+        # ---- Step 2: HEIF fallback (GDAL usually can't identify HEIF) ----
+        if not result['is_gdal_readable']:
+            ext = Path(path).suffix.lower()
+            if ext in ('.heif', '.heic'):
+                result['is_heif']      = True
+                result['format_name']  = 'HEIF/HEIC'
+                result['driver_name']  = 'heif'
+            else:
+                # Try binary probe for HEIF magic bytes regardless of extension
+                try:
+                    with open(path, 'rb') as fh:
+                        header = fh.read(16)
+                    if header[4:8] == b'ftyp':
+                        result['is_heif']     = True
+                        result['format_name'] = 'HEIF/HEIC'
+                        result['driver_name'] = 'heif'
+                except OSError:
+                    pass
+
+            if result['is_heif']:
+                # Try to get image dimensions via pillow_heif
+                try:
+                    import pillow_heif as _ph
+                    hf = _ph.open_heif(path)
+                    if len(hf) > 0:
+                        img = hf[0]
+                        result['width']  = img.size[0]
+                        result['height'] = img.size[1]
+                        result['band_count'] = len(img.mode)
+                except Exception:
+                    pass
+
+                # Geo check: embedded RDF counts as potential geo source (not confirmed geo)
+                if self.has_internal_rdf(path):
+                    result['is_geo_enabled'] = False  # needs parsing; mark as geo-capable via metadata
+
+        # ---- Step 3: discover external georeferencing sources ----
+        result['available_geo_sources'] = self._find_geo_sources(path, result['driver_name'])
+
+        return result
+
+    def _find_geo_sources(self, path: str, driver_name: str) -> list:
+        """
+        Scan the file system and file bytes for available georeferencing metadata
+        sources associated with *path*.
+
+        Returns a list of dicts, each with keys:
+            source       – one of: 'sidecar_ttl', 'worldfile', 'prj_file',
+                           'gdal_aux', 'exif_gps', 'embedded_rdf'
+            description  – human readable string
+            path         – absolute path (if file-based), else None
+            bbox_wgs84   – [min_lon, min_lat, max_lon, max_lat] if derivable, else None
+        """
+        sources = []
+        stem   = Path(path).stem
+        parent = Path(path).parent
+
+        # -- Sidecar TTL / provenance --
+        for candidate_name in (
+            f'{stem}.ttl',
+            f'{stem}_provenance.ttl',
+            f'{stem}_georef.ttl',
+        ):
+            candidate = parent / candidate_name
+            if candidate.exists():
+                sources.append({
+                    'source':      'sidecar_ttl',
+                    'description': f'TTL sidecar with GCPs ({candidate.name})',
+                    'path':        str(candidate),
+                    'bbox_wgs84':  None,
+                })
+
+        # -- Sidecar JSON provenance --
+        for candidate_name in (
+            f'{stem}_provenance.json',
+            f'{stem}.json',
+        ):
+            candidate = parent / candidate_name
+            if candidate.exists():
+                sources.append({
+                    'source':      'sidecar_json',
+                    'description': f'JSON provenance sidecar ({candidate.name})',
+                    'path':        str(candidate),
+                    'bbox_wgs84':  None,
+                })
+
+        # -- World file --
+        world_exts = (self._WORLDFILE_EXTS.get(driver_name, [])
+                      + ['.wld'])  # generic fallback
+        for wext in set(world_exts):
+            wf = parent / (stem + wext)
+            if wf.exists():
+                sources.append({
+                    'source':      'worldfile',
+                    'description': f'World file ({wf.name}) — affine geotransform',
+                    'path':        str(wf),
+                    'bbox_wgs84':  None,
+                })
+                break  # one is enough
+
+        # -- PRJ sidecar (CRS only, not a geo-position) --
+        prj = parent / (stem + '.prj')
+        if prj.exists():
+            sources.append({
+                'source':      'prj_file',
+                'description': f'CRS definition file ({prj.name})',
+                'path':        str(prj),
+                'bbox_wgs84':  None,
+            })
+
+        # -- GDAL AUX.XML (band stats, optional CRS) --
+        aux = Path(path).with_suffix(Path(path).suffix + '.aux.xml')
+        if aux.exists():
+            sources.append({
+                'source':      'gdal_aux',
+                'description': 'GDAL .aux.xml statistics / metadata',
+                'path':        str(aux),
+                'bbox_wgs84':  None,
+            })
+
+        # -- EXIF GPS (for JPEG, TIFF, HEIF) --
+        gps_info = self._extract_exif_gps(path)
+        if gps_info:
+            lat, lon = gps_info['lat'], gps_info['lon']
+            sources.append({
+                'source':      'exif_gps',
+                'description': (f'EXIF GPS tag  lat={lat:.6f}  lon={lon:.6f}'
+                                + (f'  alt={gps_info["alt"]:.1f} m'
+                                   if gps_info.get('alt') is not None else '')),
+                'path':        None,
+                'bbox_wgs84':  [lon, lat, lon, lat],  # point — caller may expand
+            })
+
+        # -- Embedded RDF/XMP --
+        if self.has_internal_rdf(path):
+            fmt = (self.internal_rdf_format or 'RDF').upper()
+            sources.append({
+                'source':      'embedded_rdf',
+                'description': f'Embedded {fmt} metadata (may contain GCPs)',
+                'path':        None,
+                'bbox_wgs84':  None,
+            })
+
+        return sources
+
+    def _extract_exif_gps(self, path: str) -> Optional[dict]:
+        """
+        Extract GPS coordinates from EXIF metadata using PIL.
+
+        Returns dict with 'lat', 'lon', (optional) 'alt', or None.
+        """
+        try:
+            from PIL import Image as _Image
+            img = _Image.open(path)
+            exif_data = img._getexif() if hasattr(img, '_getexif') else None
+            if exif_data is None:
+                # Try getexif() (Pillow >= 7.0)
+                try:
+                    raw = img.getexif()
+                    exif_data = dict(raw) if raw else None
+                except Exception:
+                    pass
+            if not exif_data:
+                return None
+
+            GPS_IFD_TAG = 34853
+            gps_ifd = exif_data.get(GPS_IFD_TAG)
+            if not gps_ifd:
+                return None
+
+            def _dms_to_decimal(dms, ref):
+                """Convert DMS tuple to decimal degrees."""
+                try:
+                    deg, mins, secs = dms
+                    # Each value may be a Fraction/IFDRational
+                    to_float = lambda v: float(v.numerator) / float(v.denominator) if hasattr(v, 'numerator') else float(v)
+                    decimal = to_float(deg) + to_float(mins) / 60.0 + to_float(secs) / 3600.0
+                    if ref in ('S', 'W'):
+                        decimal = -decimal
+                    return decimal
+                except Exception:
+                    return None
+
+            lat_dms = gps_ifd.get(2)
+            lat_ref = gps_ifd.get(1, 'N')
+            lon_dms = gps_ifd.get(4)
+            lon_ref = gps_ifd.get(3, 'E')
+
+            if not lat_dms or not lon_dms:
+                return None
+
+            lat = _dms_to_decimal(lat_dms, lat_ref)
+            lon = _dms_to_decimal(lon_dms, lon_ref)
+            if lat is None or lon is None:
+                return None
+
+            result = {'lat': lat, 'lon': lon}
+            alt_val = gps_ifd.get(6)
+            if alt_val is not None:
+                try:
+                    result['alt'] = float(alt_val.numerator) / float(alt_val.denominator) if hasattr(alt_val, 'numerator') else float(alt_val)
+                except Exception:
+                    pass
+            return result
+
+        except Exception:
+            return None
+
+    def copy_raster_to_tiff(self, raster_path: str,
+                            output_path: Optional[str] = None) -> Optional[str]:
+        """
+        Copy any GDAL-readable raster to a temporary GeoTIFF using ``gdal.Translate``.
+
+        Preserves existing geotransform, GCPs, and CRS so that the rest of the
+        pipeline can work with a canonical TIFF regardless of input format.
+
+        Args:
+            raster_path:  Source raster (GeoTIFF, JP2, PNG, …).
+            output_path:  Optional destination path; if None a temp file is used.
+
+        Returns:
+            Path to the output TIFF or None on failure.
+        """
+        try:
+            if output_path is None:
+                tmp = tempfile.NamedTemporaryFile(suffix='.tif', delete=False)
+                output_path = tmp.name
+                tmp.close()
+                self.temp_files.append(output_path)
+
+            gdal.PushErrorHandler('CPLQuietErrorHandler')
+            ds_out = gdal.Translate(
+                output_path,
+                raster_path,
+                format='GTiff',
+                creationOptions=['COMPRESS=LZW', 'TILED=YES'],
+            )
+            gdal.PopErrorHandler()
+
+            if ds_out is None:
+                print(f"gdal.Translate failed for {raster_path}")
+                return None
+            ds_out = None  # flush / close
+            return output_path
+        except Exception as exc:
+            print(f"copy_raster_to_tiff error: {exc}")
+            return None
+
+    def convert_any_to_tiff(self, path: str,
+                            output_path: Optional[str] = None) -> Optional[str]:
+        """
+        Convert *path* to a TIFF using the appropriate method:
+
+        - HEIF/HEIC  → ``convert_heif_to_tiff()`` (pillow_heif + heif-dec fallback)
+        - Everything else → ``copy_raster_to_tiff()`` via GDAL Translate
+
+        Returns the output TIFF path or None on failure.
+        """
+        ext = Path(path).suffix.lower()
+        is_heif_ext = ext in ('.heif', '.heic')
+
+        if is_heif_ext:
+            return self.convert_heif_to_tiff(path, output_path)
+
+        # Check HEIF magic bytes in case extension is wrong
+        try:
+            with open(path, 'rb') as fh:
+                if fh.read(16)[4:8] == b'ftyp':
+                    return self.convert_heif_to_tiff(path, output_path)
+        except OSError:
+            pass
+
+        return self.copy_raster_to_tiff(path, output_path)
+
+    # ------------------------------------------------------------------
+
     def display_heif_structure(self, heif_path: str) -> str:
         """
         Display the complete HEIF/HEVC file structure including boxes, metadata, and images.
-        
+        For non-HEIF raster formats (GeoTIFF, JP2, PNG, …) a GDAL metadata summary is
+        returned instead so callers can always use this method regardless of format.
+
+        IMPLEMENTATION NOTE
+        -------------------
+        The structure information below is assembled through ad-hoc parsing of
+        pillow-heif high-level attributes and raw byte inspection.  This is
+        fragile: it may miss items, mis-classify box types, or fail on unusual
+        HEIF variants.  The robust approach is to use the libheif C API directly
+        (e.g. ``heif_context_get_list_of_item_IDs``, ``heif_image_handle_*``,
+        ``heif_item_get_item_content_type``) which gives typed, structured access
+        to every box in the file without manual byte parsing.
+
         Args:
-            heif_path: Path to HEIF file
-            
+            heif_path: Path to input file (any GDAL-readable raster, or HEIF/HEIC)
+
         Returns:
-            String containing formatted file structure information
+            String containing formatted file structure / metadata information
         """
+        # ------------------------------------------------------------------
+        # Guard: if file is not HEIF, return GDAL-based metadata summary
+        # ------------------------------------------------------------------
+        probe = self.probe_raster_format(heif_path)
+        if not probe['is_heif']:
+            lines = [
+                '=' * 80,
+                f'RASTER FILE STRUCTURE: {os.path.basename(heif_path)}',
+                '=' * 80,
+                '',
+                f'Format:     {probe["format_name"]}  (driver: {probe["driver_name"]})',
+                f'File size:  {os.path.getsize(heif_path):,} bytes  '
+                f'({os.path.getsize(heif_path) / 1024 / 1024:.2f} MB)',
+                f'Dimensions: {probe["width"]} × {probe["height"]} px',
+                f'Bands:      {probe["band_count"]}',
+                '',
+            ]
+            if probe['is_geo_enabled']:
+                crs_hint = f'EPSG:{probe["crs_epsg"]}' if probe['crs_epsg'] else (
+                    probe['crs_wkt'][:60] + '…' if probe['crs_wkt'] else 'unknown CRS')
+                if probe['has_gcps']:
+                    lines.append(f'Georef:     ✓ {probe["gcp_count"]} embedded GCPs  |  CRS: {crs_hint}')
+                else:
+                    lines.append(f'Georef:     ✓ Geotransform  |  CRS: {crs_hint}')
+            else:
+                lines.append('Georef:     ✗ Not georeferenced')
+
+            sources = probe.get('available_geo_sources', [])
+            if sources:
+                lines += ['', 'Available Georeferencing Sources:']
+                for s in sources:
+                    lines.append(f'  [{s["source"]}]  {s["description"]}')
+            else:
+                lines += ['', 'No external georeferencing sources detected.']
+
+            # Try to add GDAL gdalinfo-style detail
+            try:
+                gdal.UseExceptions()
+                ds = gdal.Open(heif_path, gdal.GA_ReadOnly)
+                if ds is not None:
+                    gt = ds.GetGeoTransform()
+                    if gt and gt != (0, 1, 0, 0, 0, 1):
+                        lines += [
+                            '',
+                            'GeoTransform:',
+                            f'  Origin (top-left): ({gt[0]:.6f}, {gt[3]:.6f})',
+                            f'  Pixel size X:  {gt[1]:.10f}',
+                            f'  Pixel size Y:  {gt[5]:.10f}',
+                        ]
+                    gcps = ds.GetGCPs()
+                    if gcps:
+                        lines += ['', f'Embedded GCPs ({len(gcps)}):']
+                        for i, gcp in enumerate(gcps[:6]):
+                            lines.append(
+                                f'  GCP {i+1}:  pixel=({gcp.GCPPixel:.1f}, {gcp.GCPLine:.1f})'
+                                f'  →  lon={gcp.GCPX:.6f}  lat={gcp.GCPY:.6f}'
+                            )
+                        if len(gcps) > 6:
+                            lines.append(f'  … and {len(gcps)-6} more')
+                    ds = None
+            except Exception:
+                pass
+
+            return '\n'.join(lines)
+
+        # ------------------------------------------------------------------
+        # HEIF path — original implementation follows
+        # ------------------------------------------------------------------
         if not HEIF_AVAILABLE:
             return "ERROR: pillow-heif not installed. Install with: pip install pillow-heif"
-        
+
         structure = []
         structure.append("=" * 80)
         structure.append(f"HEIF/HEVC FILE STRUCTURE: {os.path.basename(heif_path)}")
@@ -680,11 +1356,15 @@ class HEIFProcessor:
                 try:
                     plugin_dir = os.path.join(os.path.dirname(self.heif_convert_cmd), '..', 'libheif', 'plugins')
                     info_cmd = [heif_info_cmd]
+                    # heif-info accepts --plugin-directory; however prefer the
+                    # LIBHEIF_PLUGIN_PATH environment variable for consistency.
+                    env_info = os.environ.copy()
                     if os.path.exists(plugin_dir):
-                        info_cmd.extend(['--plugin-directory', plugin_dir])
+                        env_info['LIBHEIF_PLUGIN_PATH'] = plugin_dir
                     info_cmd.append(heif_path)
                     
-                    info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=10)
+                    info_result = subprocess.run(info_cmd, capture_output=True, text=True,
+                                                   timeout=10, env=env_info)
                     if 'jpeg2000' in info_result.stdout.lower() or 'j2k' in info_result.stdout.lower():
                         codec_type = "jpeg2000"
                         print("Detected JPEG2000 codec in HEIF")
@@ -1509,14 +2189,14 @@ class HEIFProcessor:
             "output_file": os.path.basename(output_path)
         }
         try:
-            # Step 1: Convert HEIF to TIFF
-            print("Step 1: Converting HEIF to TIFF...")
-            tiff_path = self.convert_heif_to_tiff(heif_path)
+            # Step 1: Convert input raster to TIFF (HEIF via pillow_heif; others via GDAL Translate)
+            print(f"Step 1: Converting {os.path.basename(heif_path)} to TIFF...")
+            tiff_path = self.convert_any_to_tiff(heif_path)
             if not tiff_path:
                 raise Exception(
-                    "HEIF file contains no image data (metadata-only container).\n\n"
-                    "The plugin requires an actual image for georeferencing. "
-                    "This HEIF appears to only contain RDF metadata without pixel data."
+                    "Could not convert input to TIFF.\n\n"
+                    "For HEIF files: ensure pillow-heif or libheif tools are installed.\n"
+                    "For other raster formats: ensure GDAL can open the file."
                 )
             
             # Step 2: Add GCPs to create georeferenced TIFF
@@ -1601,6 +2281,9 @@ class HEIFProcessor:
             print(f"Input hash ({input_hash_algo}): {input_hash}")
             print(f"Output hash ({output_hash_algo}): {output_hash}")
             
+            # Generate GDAL statistics (.aux.xml) for the output file
+            self._compute_gdal_statistics(output_path)
+            
             # Extract and add ISO 19115-4 imagery metadata
             if ISO19115_4_AVAILABLE:
                 try:
@@ -1640,7 +2323,29 @@ class HEIFProcessor:
         except Exception as e:
             print(f"Error processing HEIF with TTL: {e}")
             return False, provenance
-    
+
+    def _compute_gdal_statistics(self, output_path: str) -> None:
+        """
+        Compute per-band raster statistics and flush them to a GDAL .aux.xml sidecar file.
+
+        Args:
+            output_path: Path to the raster file (GeoTIFF or JP2)
+        """
+        try:
+            from osgeo import gdal as _gdal
+            dataset = _gdal.Open(output_path, _gdal.GA_Update)
+            if dataset is None:
+                print(f"Warning: Could not open {output_path} for statistics computation")
+                return
+            for band_idx in range(1, dataset.RasterCount + 1):
+                band = dataset.GetRasterBand(band_idx)
+                band.ComputeStatistics(False)
+            dataset.FlushCache()
+            dataset = None
+            print(f"✓ GDAL statistics written to {output_path}.aux.xml")
+        except Exception as e:
+            print(f"Warning: Could not compute GDAL statistics: {e}")
+
     def generate_rdf_provenance(self, provenance: Dict, output_path: str) -> str:
         """
         Generate RDF Turtle file from provenance metadata using W3C PROV-O ontology.
@@ -1675,13 +2380,16 @@ class HEIFProcessor:
             rdf_lines.append("    .")
             rdf_lines.append("")
             
-            # Derived Entity (GeoTIFF output)
+            # Derived Entity (output file)
+            is_jp2_output = provenance.get('output_file', '').endswith('.jp2')
+            output_mime = "image/jp2" if is_jp2_output else "image/tiff"
+            output_geometry_label = "JP2 with GCPs" if is_jp2_output else "GeoTIFF with GCPs"
             derived_uri = f"urn:uuid:{provenance['derived_uuid']}"
             rdf_lines.append(f"<{derived_uri}>")
             rdf_lines.append("    a prov:Entity, geo:Feature ;")
             rdf_lines.append(f"    rdfs:label \"{provenance['output_file']}\" ;")
-            rdf_lines.append("    dct:format \"image/tiff\" ;")
-            rdf_lines.append("    geo:hasGeometry \"GeoTIFF with GCPs\" ;")
+            rdf_lines.append(f"    dct:format \"{output_mime}\" ;")
+            rdf_lines.append(f"    geo:hasGeometry \"{output_geometry_label}\" ;")
             if provenance.get('output_hash'):
                 rdf_lines.append(f"    crypto:hash \"{provenance['output_hash']}\" ;")
                 rdf_lines.append(f"    crypto:hashAlgorithm \"{provenance['output_hash_algorithm']}\" ;")
@@ -1999,10 +2707,13 @@ class HEIFProcessor:
                     '-q', str(quality)
                 ]
                 
-                # Add plugin directory if JPEG2000 codecs are used (they're separate plugins)
+                # heif-enc does not support --plugin-directory on the command line.
+                # Use the LIBHEIF_PLUGIN_PATH environment variable instead.
                 plugin_dir = os.path.join(os.path.dirname(self.heif_enc_cmd), '..', 'libheif', 'plugins')
-                if os.path.exists(plugin_dir) and compression in ['jpeg2000', 'htj2k']:
-                    cmd.extend(['--plugin-directory', plugin_dir])
+                enc_env = os.environ.copy()
+                if os.path.exists(plugin_dir):
+                    enc_env['LIBHEIF_PLUGIN_PATH'] = plugin_dir
+                    print(f"  heif-enc: using plugin dir via LIBHEIF_PLUGIN_PATH: {plugin_dir}")
                 
                 # Add compression codec
                 if compression == 'unci' or compression == 'uncompressed':
@@ -2016,8 +2727,9 @@ class HEIFProcessor:
                 # hevc is default
                 
                 print(f"  → Command: {' '.join(cmd)}")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                                        env=enc_env)
+
                 if result.returncode != 0:
                     error_msg = result.stderr.strip()
                     

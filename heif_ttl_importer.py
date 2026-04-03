@@ -1,5 +1,7 @@
+# SPDX-FileCopyrightText: 2026 4113Eng-wfs
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
-Main plugin class for HEIF/TTL Importer
+Main plugin class for General Raster Importer
 """
 import os
 from pathlib import Path
@@ -19,7 +21,7 @@ from .heif_processor import HEIFProcessor
 
 
 class HEIFTTLImporter:
-    """QGIS Plugin for importing HEIF imagery with TTL metadata"""
+    """QGIS Plugin for importing any GDAL-readable raster with optional TTL/RDF georeferencing"""
 
     def __init__(self, iface):
         """Constructor"""
@@ -41,7 +43,7 @@ class HEIFTTLImporter:
         
         # Plugin variables
         self.actions = []
-        self.menu = '&HEIF/TTL Importer'
+        self.menu = '&General Raster Importer'
         self.toolbar = None
         self.dialog = None
     
@@ -62,7 +64,7 @@ class HEIFTTLImporter:
         parent=None
     ):
         """Add a toolbar icon to the toolbar"""
-        icon = QIcon(icon_path)
+        icon = QIcon(icon_path) if icon_path else QIcon()
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
         action.setEnabled(enabled_flag)
@@ -75,8 +77,8 @@ class HEIFTTLImporter:
         
         if add_to_toolbar:
             if self.toolbar is None:
-                self.toolbar = self.iface.addToolBar('HEIF/TTL Importer')
-                self.toolbar.setObjectName('HEIFTTLImporterToolbar')
+                self.toolbar = self.iface.addToolBar('General Raster Importer')
+                self.toolbar.setObjectName('GeneralRasterImporterToolbar')
             self.toolbar.addAction(action)
         
         if add_to_menu:
@@ -93,11 +95,11 @@ class HEIFTTLImporter:
         
         self.add_action(
             icon_path,
-            text=self.tr('Import HEIF/TTL Imagery'),
+            text=self.tr('General Raster Importer'),
             callback=self.run,
             parent=self.iface.mainWindow(),
-            status_tip=self.tr('Import HEIF imagery with TTL metadata georeferencing'),
-            whats_this=self.tr('Import HEIF imagery using Ground Control Points from TTL metadata')
+            status_tip=self.tr('Import any GDAL-readable raster with optional TTL/RDF georeferencing'),
+            whats_this=self.tr('Import raster imagery using Ground Control Points from TTL/RDF metadata and export to any GDAL-writable format')
         )
     
     def unload(self):
@@ -112,7 +114,7 @@ class HEIFTTLImporter:
     
     def log_message(self, message: str, level=Qgis.Info):
         """Log a message to QGIS message log"""
-        QgsMessageLog.logMessage(message, 'HEIF/TTL Importer', level)
+        QgsMessageLog.logMessage(message, 'General Raster Importer', level)
     
     def run(self):
         """Run the plugin"""
@@ -131,7 +133,7 @@ class HEIFTTLImporter:
         
         # Create dialog if not exists
         if self.dialog is None:
-            self.dialog = HEIFTTLImporterDialog(self.iface.mainWindow())
+            self.dialog = HEIFTTLImporterDialog(self.iface.mainWindow(), iface=self.iface)
         
         # Set import callback to trigger processing
         self.dialog.import_callback = self.process_import
@@ -204,15 +206,66 @@ class HEIFTTLImporter:
                 if len(gcps) == 0:
                     raise Exception("No GCPs found in internal RDF metadata. The metadata may be incomplete.")
             else:
-                raise Exception("No metadata source available (neither external TTL nor internal RDF)")
+                # No TTL/RDF — check if the raster is already georeferenced or has
+                # detectable geo metadata (worldfile, embedded geotransform, GCPs).
+                processor = self.dialog.heif_processor if self.dialog.heif_processor else HEIFProcessor()
+                probe = getattr(self.dialog, '_last_raster_probe', None) or \
+                        processor.probe_raster_format(heif_path)
+
+                if probe.get('is_geo_enabled') or probe.get('available_geo_sources'):
+                    # GDAL Translate will bake any worldfile/embedded CRS into the temp TIFF;
+                    # extract_georeference_from_tiff() will then synthesise corner GCPs.
+                    geo_src_names = [s['source'] for s in probe.get('available_geo_sources', [])]
+                    self.log_message(
+                        f"No TTL/RDF provided — attempting to derive GCPs from the "
+                        f"raster itself. Detected geo sources: "
+                        f"{', '.join(geo_src_names) if geo_src_names else 'embedded geotransform'}"
+                    )
+                    temp_for_geo = processor.copy_raster_to_tiff(heif_path)
+                    if temp_for_geo:
+                        extracted_gcps, width, height = processor.extract_georeference_from_tiff(temp_for_geo)
+                        if len(extracted_gcps) > 0:
+                            gcps = extracted_gcps
+                            self.log_message(
+                                f"✓ Derived {len(gcps)} GCPs from embedded geotransform  "
+                                f"({width}×{height} px)"
+                            )
+                        else:
+                            sources_hint = '\n'.join(
+                                f'  • {s["description"]}'
+                                for s in probe.get('available_geo_sources', [])
+                            )
+                            raise Exception(
+                                "Could not extract georeferencing from the raster.\n\n"
+                                + (f"Detected potential sources:\n{sources_hint}\n\n"
+                                   "Please provide a TTL sidecar file with GCPs."
+                                   if sources_hint else
+                                   "No georeferencing sources found. "
+                                   "Please provide a TTL sidecar file with GCPs.")
+                            )
+                    else:
+                        raise Exception("Could not open the raster with GDAL to extract geotransform.")
+                else:
+                    sources_hint = '\n'.join(
+                        f'  • {s["description"]}'
+                        for s in probe.get('available_geo_sources', [])
+                    )
+                    raise Exception(
+                        "No metadata source available and the raster is not georeferenced.\n\n"
+                        + (f"Detected potential sources:\n{sources_hint}\n\n"
+                           "Please provide a TTL sidecar file with GCPs."
+                           if sources_hint else
+                           "Please provide a TTL sidecar file or ensure the raster has "
+                           "an embedded geotransform, GCPs, or a world file (.tfw/.j2w).")
+                    )
             
             # FALLBACK: If no GCPs found in TTL/RDF, try extracting from converted image
             if len(gcps) == 0:
                 self.log_message("No GCPs in metadata, attempting to extract from converted image...")
                 processor = self.dialog.heif_processor if self.dialog.heif_processor else HEIFProcessor()
-                
-                # Convert HEIF to TIFF first
-                tiff_path = processor.convert_heif_to_tiff(heif_path)
+
+                # Use convert_any_to_tiff so non-HEIF formats are handled via GDAL Translate
+                tiff_path = processor.convert_any_to_tiff(heif_path)
                 if tiff_path:
                     extracted_gcps, width, height = processor.extract_georeference_from_tiff(tiff_path)
                     if len(extracted_gcps) > 0:
@@ -348,6 +401,18 @@ class HEIFTTLImporter:
             
             # Enable package button
             self.dialog.btnCreatePackage.setEnabled(True)
+
+            # Auto-load provenance into viewer
+            provenance_file = provenance.get('provenance_file')
+            if provenance_file and os.path.exists(provenance_file):
+                try:
+                    self.dialog.load_provenance_file(provenance_file)
+                    self.log_message(f"Provenance loaded into viewer: {provenance_file}")
+                except Exception as pv_err:
+                    self.log_message(
+                        f"Warning: Could not load provenance into viewer: {pv_err}",
+                        level=Qgis.Warning
+                    )
             
         except Exception as e:
             error_msg = f"Error importing HEIF/TTL: {str(e)}"

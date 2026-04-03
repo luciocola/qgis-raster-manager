@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 4113Eng-wfs
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
 TTL/RDF Parser for extracting Ground Control Points from metadata
 """
