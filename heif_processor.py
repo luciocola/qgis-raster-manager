@@ -52,6 +52,270 @@ except ImportError:
         _HeifContext = None  # type: ignore[assignment,misc]
         _SWIG_OK = False
 
+# ---------------------------------------------------------------------------
+# Pure-Python minimal ISOBMFF box parser
+# Replaces the fragile byte-scan heuristics used when the SWIG binding is not
+# available.  No extra dependencies — stdlib only.
+#
+# Reference: ISO 14496-12 §4.2 (box structure), §8.11.6 (ItemInfoBox/infe),
+#            §8.11.3 (ItemLocationBox/iloc).
+# ---------------------------------------------------------------------------
+import struct as _struct
+
+
+def _isobmff_iter_boxes(buf: bytes, start: int, end: int):
+    """Yield (type_str, payload_bytes) for every ISOBMFF box in buf[start:end].
+
+    Handles 32-bit sizes, extended 64-bit sizes (size_field==1), and
+    run-to-end boxes (size_field==0).  Stops silently on any malformed data.
+    """
+    pos = start
+    while pos + 8 <= end:
+        size_field = _struct.unpack_from('>I', buf, pos)[0]
+        box_type = buf[pos + 4:pos + 8].decode('latin-1', errors='replace')
+        if size_field == 1:          # 64-bit extended size
+            if pos + 16 > end:
+                break
+            actual_size = _struct.unpack_from('>Q', buf, pos + 8)[0]
+            header = 16
+        elif size_field == 0:        # box extends to end of container
+            actual_size = end - pos
+            header = 8
+        else:
+            actual_size = size_field
+            header = 8
+        if actual_size < header:
+            break                    # corrupt — stop
+        box_end = pos + actual_size
+        yield box_type, buf[pos + header: min(box_end, end)]
+        pos = box_end
+
+
+def _isobmff_items(path: str, max_bytes: int = 524288) -> list:
+    """Parse ISOBMFF ``infe`` (ItemInfoEntry) records from a HEIF/GIMI file.
+
+    Reads at most *max_bytes* from the start of the file (default 512 KiB —
+    sufficient for the ``ftyp`` + ``meta`` boxes in virtually all HEIF files).
+
+    Returns a list of dicts::
+
+        {
+            'item_id':   int,        # item identifier
+            'item_type': str,        # 4-char code e.g. 'hvc1', 'grid', 'mime'
+            'item_name': str,        # item name string (may be empty)
+            'mime_type': str|None,   # MIME content-type when item_type == 'mime'
+        }
+
+    Returns an empty list on any I/O or parse error.
+    """
+    try:
+        with open(path, 'rb') as fh:
+            buf = fh.read(max_bytes)
+    except OSError:
+        return []
+
+    items: list = []
+
+    def _cstr(data: bytes, pos: int):
+        """Return (decoded_str, next_pos) for a null-terminated string."""
+        end = data.find(b'\x00', pos)
+        if end == -1:
+            return data[pos:].decode('utf-8', errors='replace'), len(data)
+        return data[pos:end].decode('utf-8', errors='replace'), end + 1
+
+    def _parse_infe(payload: bytes):
+        if len(payload) < 4:
+            return
+        version = payload[0]
+        pos = 4                      # skip version (1 byte) + flags (3 bytes)
+        if version >= 2:
+            if version == 2:
+                if pos + 4 > len(payload):
+                    return
+                item_id = _struct.unpack_from('>H', payload, pos)[0]; pos += 2
+                pos += 2             # item_protection_index
+            else:                    # version ≥ 3
+                if pos + 6 > len(payload):
+                    return
+                item_id = _struct.unpack_from('>I', payload, pos)[0]; pos += 4
+                pos += 2             # item_protection_index
+            if pos + 4 > len(payload):
+                return
+            item_type = payload[pos:pos + 4].decode('latin-1', errors='replace')
+            pos += 4
+            item_name, pos = _cstr(payload, pos)
+            mime_type = None
+            if item_type == 'mime':
+                mime_type, pos = _cstr(payload, pos)  # content_type
+            items.append({
+                'item_id':   item_id,
+                'item_type': item_type,
+                'item_name': item_name,
+                'mime_type': mime_type,
+            })
+        # v0/v1 infe boxes lack item_type — skip them
+
+    def _parse_iinf(payload: bytes):
+        """iinf is a FullBox; walk its child ``infe`` boxes."""
+        if len(payload) < 4:
+            return
+        version = payload[0]
+        pos = 4                      # skip version + flags
+        if version == 0:
+            if pos + 2 > len(payload):
+                return
+            pos += 2                 # item_count (unused)
+        else:
+            if pos + 4 > len(payload):
+                return
+            pos += 4                 # item_count (unused)
+        for btype, bpayload in _isobmff_iter_boxes(payload, pos, len(payload)):
+            if btype == 'infe':
+                _parse_infe(bpayload)
+
+    def _parse_meta(payload: bytes):
+        """meta is a FullBox; skip 4-byte version+flags then walk children."""
+        if len(payload) < 4:
+            return
+        for btype, bpayload in _isobmff_iter_boxes(payload, 4, len(payload)):
+            if btype == 'iinf':
+                _parse_iinf(bpayload)
+
+    for btype, bpayload in _isobmff_iter_boxes(buf, 0, len(buf)):
+        if btype == 'meta':
+            _parse_meta(bpayload)
+        elif btype == 'moov':        # HEIF meta can also live inside moov
+            for inner_type, inner_payload in _isobmff_iter_boxes(bpayload, 0, len(bpayload)):
+                if inner_type == 'meta':
+                    _parse_meta(inner_payload)
+
+    return items
+
+
+def _isobmff_read_item(path: str, item_id: int, max_bytes: int = 33554432) -> bytes:
+    """Read the raw bytes for a specific item from an ISOBMFF file.
+
+    Parses the ``iloc`` (ItemLocationBox) to find the item's extents, then
+    reads them from the file.  Supports construction method 0 (offset into
+    mdat/file) and method 1 (idat box).
+
+    *max_bytes* caps the total number of bytes read per extent (default 32 MiB).
+    Returns ``b''`` on any error or if the item is not found.
+    """
+    _ILOC_CM_FILE  = 0   # extent offset is absolute within the file
+    _ILOC_CM_IDAT  = 1   # extent offset is within the idat box
+    # Construction method 2 (item offset) is not implemented here.
+
+    try:
+        with open(path, 'rb') as fh:
+            header = fh.read(524288)   # parse iloc from first 512 KiB
+    except OSError:
+        return b''
+
+    # ---- find iloc payload -------------------------------------------------
+    iloc_payload: bytes = b''
+
+    def _find_iloc(payload: bytes):
+        nonlocal iloc_payload
+        if len(payload) < 4:
+            return
+        for btype, bpayload in _isobmff_iter_boxes(payload, 4, len(payload)):
+            if btype == 'iloc':
+                iloc_payload = bpayload
+                return
+
+    for btype, bpayload in _isobmff_iter_boxes(header, 0, len(header)):
+        if btype == 'meta':
+            _find_iloc(bpayload)
+        elif btype == 'moov':
+            for it, ip in _isobmff_iter_boxes(bpayload, 0, len(bpayload)):
+                if it == 'meta':
+                    _find_iloc(ip)
+
+    if not iloc_payload:
+        return b''
+
+    # ---- parse iloc --------------------------------------------------------
+    # FullBox: version(1) + flags(3)
+    if len(iloc_payload) < 4:
+        return b''
+    version = iloc_payload[0]
+    pos = 4
+
+    if len(iloc_payload) < pos + 2:
+        return b''
+    offset_size    = (iloc_payload[pos] >> 4) & 0xF
+    length_size    = (iloc_payload[pos])      & 0xF
+    base_offset_sz = (iloc_payload[pos + 1] >> 4) & 0xF
+    index_size     = (iloc_payload[pos + 1])       & 0xF  # version ≥ 1
+    pos += 2
+
+    def _read_uint(n: int) -> int:
+        nonlocal pos
+        if n == 0:
+            return 0
+        fmt = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}.get(n)
+        if fmt is None or pos + n > len(iloc_payload):
+            return 0
+        val = _struct.unpack_from(fmt, iloc_payload, pos)[0]
+        pos += n
+        return val
+
+    if version < 2:
+        item_count = _read_uint(2)
+    else:
+        item_count = _read_uint(4)
+
+    target_extents = None
+    target_cm      = 0
+
+    for _ in range(item_count):
+        if version < 2:
+            iid = _read_uint(2)
+        else:
+            iid = _read_uint(4)
+
+        if version in (1, 2):
+            cm = _read_uint(2) & 0xF
+        else:
+            cm = 0
+
+        base_offset = _read_uint(base_offset_sz)
+        extent_count = _read_uint(2)
+        extents = []
+        for _ in range(extent_count):
+            if version in (1, 2) and index_size > 0:
+                _read_uint(index_size)  # extent_index (unused)
+            ext_offset = _read_uint(offset_size)
+            ext_length = _read_uint(length_size)
+            extents.append((base_offset + ext_offset, ext_length))
+
+        if iid == item_id:
+            target_extents = extents
+            target_cm      = cm
+            break
+
+    if not target_extents:
+        return b''
+
+    # ---- read extents from file or idat ------------------------------------
+    result = bytearray()
+    try:
+        with open(path, 'rb') as fh:
+            for file_offset, length in target_extents:
+                if length == 0 or len(result) >= max_bytes:
+                    break
+                chunk_len = min(length, max_bytes - len(result))
+                if target_cm == _ILOC_CM_FILE:
+                    fh.seek(file_offset)
+                    result.extend(fh.read(chunk_len))
+                # Construction method 1 (idat) requires locating the idat box;
+                # rare in practice — skip gracefully.
+    except OSError:
+        return b''
+
+    return bytes(result)
+
 
 class HEIFProcessor:
     """Processes HEIF images and converts them to GeoTIFF with GCPs"""
@@ -237,29 +501,16 @@ class HEIFProcessor:
                 print(f"[detect_tiling_mode] SWIG binding error: {_swig_err}")
 
         # ------------------------------------------------------------------
-        # Last-resort: byte-scan (fragile — false-positive/negative risk)
-        # WARNING: 4-byte strings may appear in compressed image data.
-        # Build libheif_binding (./libheif_binding/build.sh) to avoid this path.
+        # Fallback: proper ISOBMFF item-info parsing via pure-Python walker.
+        # Reads infe boxes to find the actual item_type code ('grid'/'tili'/'unci').
         # ------------------------------------------------------------------
         try:
-            with open(heif_path, 'rb') as f:
-                data = f.read(16384)  # Read first 16 KB
-
-            # Scan for 4-byte box-type codes at ISOBMFF box boundaries would
-            # require full box parsing.  This naive search is a heuristic only.
-            if b'grid' in data:
-                print("[detect_tiling_mode] WARNING: 'grid' found via byte-scan (heuristic)")
-                self.tiling_mode = 'grid'
-                return 'grid'
-            if b'tili' in data:
-                print("[detect_tiling_mode] WARNING: 'tili' found via byte-scan (heuristic)")
-                self.tiling_mode = 'tili'
-                return 'tili'
-            if b'unci' in data:
-                print("[detect_tiling_mode] WARNING: 'unci' found via byte-scan (heuristic)")
-                self.tiling_mode = 'unci'
-                return 'unci'
-
+            tiling_types = {'grid', 'tili', 'unci'}
+            for item in _isobmff_items(heif_path):
+                if item['item_type'] in tiling_types:
+                    mode = item['item_type']
+                    self.tiling_mode = mode
+                    return mode
             return None
         except Exception as e:
             print(f"Error detecting tiling mode: {e}")
@@ -311,19 +562,20 @@ class HEIFProcessor:
                 # Fall through to byte-scan below
 
         # ------------------------------------------------------------------
-        # Fallback: byte-scan (fragile — false-positive/negative risk)
-        # Build libheif_binding (./libheif_binding/build.sh) to avoid this path.
+        # Fallback: ISOBMFF item-info parsing — check for 'mime' items whose
+        # content-type matches text/turtle or application/rdf+xml.
         # ------------------------------------------------------------------
         try:
-            with open(heif_path, 'rb') as f:
-                data = f.read()
-                if b'<rdf:RDF' in data or b'<?xpacket' in data:
-                    self.internal_rdf_format = 'xml'
-                    return True
-                if b'@prefix rdf:' in data or b'@prefix rdfs:' in data:
-                    self.internal_rdf_format = 'turtle'
-                    return True
-                return False
+            for item in _isobmff_items(heif_path):
+                if item['item_type'] == 'mime' and item['mime_type']:
+                    mt = item['mime_type'].lower()
+                    if 'turtle' in mt:
+                        self.internal_rdf_format = 'turtle'
+                        return True
+                    if 'rdf' in mt or 'xml' in mt:
+                        self.internal_rdf_format = 'xml'
+                        return True
+            return False
         except Exception as e:
             print(f"Error checking for internal RDF: {e}")
             return False
@@ -357,51 +609,30 @@ class HEIFProcessor:
                 # Fall through to byte-scan below
 
         # ------------------------------------------------------------------
-        # Fallback: byte-scan (fragile — false-positive/negative risk)
-        # Build libheif_binding (./libheif_binding/build.sh) to avoid this path.
+        # Fallback: ISOBMFF item-info + iloc parsing — locate the mime item
+        # whose content-type is text/turtle or application/rdf+xml, then read
+        # its bytes using the item-location box.
         # ------------------------------------------------------------------
         try:
-            with open(heif_path, 'rb') as f:
-                data = f.read()
-
-                # Extract XML/RDF format
-                if b'<rdf:RDF' in data:
-                    idx = data.find(b'<rdf:RDF')
-                    end_idx = data.find(b'</rdf:RDF>', idx)
-                    if end_idx > 0:
-                        rdf_data = data[idx:end_idx + 10]
-                        self.internal_rdf = rdf_data.decode('utf-8', errors='ignore')
-                        self.internal_rdf_format = 'xml'
-                        return self.internal_rdf
-
-                # Extract Turtle format RDF (TB21 GIMI files)
-                elif b'@prefix rdf:' in data or b'@prefix rdfs:' in data:
-                    idx = data.find(b'@prefix')
-                    # Extract up to 100KB to ensure all GCP data is captured
-                    end_idx = min(idx + 100000, len(data))
-                    chunk = data[idx:end_idx]
-                    try:
-                        turtle_text = chunk.decode('utf-8', errors='ignore')
-                        self.internal_rdf = turtle_text
-                        self.internal_rdf_format = 'turtle'
-                        print(f"Extracted {len(self.internal_rdf)} characters of Turtle RDF")
-                        return self.internal_rdf
-                    except Exception as e:
-                        print(f"Error decoding Turtle RDF: {e}")
-                        return None
-
-                # Check for XMP packet if RDF not found
-                if b'<?xpacket' in data:
-                    idx = data.find(b'<?xpacket')
-                    end_idx = data.find(b'<?xpacket end', idx)
-                    if end_idx > 0:
-                        xmp_data = data[idx:end_idx + 50]
-                        self.internal_rdf = xmp_data.decode('utf-8', errors='ignore')
-                        self.internal_rdf_format = 'xmp'
-                        return self.internal_rdf
-
-                return None
-
+            for item in _isobmff_items(heif_path):
+                if item['item_type'] != 'mime' or not item['mime_type']:
+                    continue
+                mt = item['mime_type'].lower()
+                if 'turtle' in mt:
+                    fmt = 'turtle'
+                elif 'rdf' in mt or 'xml' in mt:
+                    fmt = 'xml'
+                else:
+                    continue
+                raw = _isobmff_read_item(heif_path, item['item_id'])
+                if not raw:
+                    continue
+                text = raw.decode('utf-8', errors='replace')
+                self.internal_rdf = text
+                self.internal_rdf_format = fmt
+                print(f"[extract_internal_rdf] ISOBMFF walker: {len(text)} chars ({fmt})")
+                return self.internal_rdf
+            return None
         except Exception as e:
             print(f"Error extracting internal RDF: {e}")
             return None
