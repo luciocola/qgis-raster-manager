@@ -12,6 +12,14 @@ from typing import Optional, Tuple, Dict, List
 from pathlib import Path
 
 try:
+    from .ido_annotator import IDOAnnotator
+except ImportError:
+    try:
+        from ido_annotator import IDOAnnotator
+    except ImportError:
+        IDOAnnotator = None
+
+try:
     from PIL import Image
     from pillow_heif import register_heif_opener
     import pillow_heif
@@ -2667,7 +2675,30 @@ class HEIFProcessor:
             # Write to file
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(rdf_lines))
-            
+
+            # Append IDO MediaObject + AnnotationLiabilityRecord triples
+            if IDOAnnotator is not None:
+                try:
+                    ido_anno = provenance.get('ido_annotation', {})
+                    annotator = IDOAnnotator(
+                        responsible_party=ido_anno.get(
+                            'responsible_party', '4113 Engineering'),
+                        legal_jurisdiction=ido_anno.get('legal_jurisdiction', ''),
+                        ownership_did=ido_anno.get('ownership_did', ''),
+                        data_classification=ido_anno.get(
+                            'data_classification', 'unclassified'),
+                        retention_days=int(ido_anno.get('retention_days', 3650)),
+                    )
+                    # Derive raster path from provenance (provenance JSON is neighbour)
+                    raster_hint = output_path.replace('_provenance.ttl', '')
+                    ido_ttl = annotator.build_media_object_ttl(provenance, raster_hint)
+                    with open(output_path, 'a', encoding='utf-8') as f:
+                        f.write('\n\n')
+                        f.write(ido_ttl)
+                    print('✓ IDO MediaObject + AnnotationLiabilityRecord appended to TTL')
+                except Exception as ido_err:
+                    print(f'Warning: Could not append IDO triples: {ido_err}')
+
             print(f"RDF provenance saved to: {output_path}")
             return output_path
             

@@ -1,5 +1,5 @@
 [general]
-name=General Raster Importer
+name=QGIS Raster Manager
 qgisMinimumVersion=3.0
 description=Import any GDAL-readable raster (HEIF, GeoTIFF, JPEG2000, ECW, HFA, NITF, PNG, JPEG …) with optional TTL/RDF metadata for GCP-based georeferencing, and export to any GDAL-writable format
 version=2.0.0

@@ -1,4 +1,4 @@
-# General Raster Importer for QGIS
+# QGIS Raster Manager
 
 A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files and uses TTL (Turtle RDF) metadata to automatically georeference them using Ground Control Points (GCPs). Includes full **ISO 19115-4 imagery metadata** extraction and quality reporting. **NEW**: Export GeoTIFF to TB21 GIMI HEIF format with embedded RDF metadata.
 

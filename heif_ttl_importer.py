@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 4113Eng-wfs
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Main plugin class for General Raster Importer
+Main plugin class for QGIS Raster Manager
 """
 import os
 from pathlib import Path
@@ -43,7 +43,7 @@ class HEIFTTLImporter:
         
         # Plugin variables
         self.actions = []
-        self.menu = '&General Raster Importer'
+        self.menu = '&QGIS Raster Manager'
         self.toolbar = None
         self.dialog = None
     
@@ -77,8 +77,8 @@ class HEIFTTLImporter:
         
         if add_to_toolbar:
             if self.toolbar is None:
-                self.toolbar = self.iface.addToolBar('General Raster Importer')
-                self.toolbar.setObjectName('GeneralRasterImporterToolbar')
+                self.toolbar = self.iface.addToolBar('QGIS Raster Manager')
+                self.toolbar.setObjectName('QGISRasterManagerToolbar')
             self.toolbar.addAction(action)
         
         if add_to_menu:
@@ -95,7 +95,7 @@ class HEIFTTLImporter:
         
         self.add_action(
             icon_path,
-            text=self.tr('General Raster Importer'),
+            text=self.tr('QGIS Raster Manager'),
             callback=self.run,
             parent=self.iface.mainWindow(),
             status_tip=self.tr('Import any GDAL-readable raster with optional TTL/RDF georeferencing'),
@@ -114,7 +114,7 @@ class HEIFTTLImporter:
     
     def log_message(self, message: str, level=Qgis.Info):
         """Log a message to QGIS message log"""
-        QgsMessageLog.logMessage(message, 'General Raster Importer', level)
+        QgsMessageLog.logMessage(message, 'QGIS Raster Manager', level)
     
     def run(self):
         """Run the plugin"""

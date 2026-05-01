@@ -17,6 +17,11 @@ import json
 import os
 from typing import Optional
 
+try:
+    from .ido_annotator import IDOAnnotator
+except ImportError:
+    from ido_annotator import IDOAnnotator
+
 
 class ProvenanceToSTACConverter:
     """
@@ -35,6 +40,7 @@ class ProvenanceToSTACConverter:
         "https://stac-extensions.github.io/checksum/v1.0.0/schema.json",
         "https://stac-extensions.github.io/processing/v1.1.0/schema.json",
         "https://stac-extensions.github.io/eo/v1.1.0/schema.json",
+        IDOAnnotator.IDO_EXTENSION_URI,  # Imagery Domain Ontology v1.1.0
     ]
 
     # Map _provenance.json quality report types → STAC property names
@@ -78,7 +84,7 @@ class ProvenanceToSTACConverter:
             prov = json.load(fh)
 
         bbox, geometry = self._extract_bbox_and_geometry(raster_path)
-        properties = self._build_properties(prov)
+        properties = self._build_properties(prov, raster_path)
         assets = self._build_assets(prov, provenance_json_path, raster_path)
 
         item_id = prov.get("derived_uuid", os.path.splitext(os.path.basename(raster_path))[0])
@@ -162,8 +168,8 @@ class ProvenanceToSTACConverter:
         }
         return bbox, geometry
 
-    def _build_properties(self, prov: dict) -> dict:
-        """Map provenance fields to STAC Item properties."""
+    def _build_properties(self, prov: dict, raster_path: Optional[str] = None) -> dict:
+        """Map provenance fields to STAC Item properties, including IDO annotations."""
         props: dict = {
             "datetime": prov.get("processing_timestamp"),
             "title": prov.get("output_file"),
@@ -191,6 +197,18 @@ class ProvenanceToSTACConverter:
         grid = iso.get("gridSpatialRepresentation")
         if grid:
             props["grid_spatial_representation"] = grid
+
+        # IDO (Imagery Domain Ontology) properties
+        ido_anno = prov.get("ido_annotation", {})
+        annotator = IDOAnnotator(
+            responsible_party=ido_anno.get("responsible_party", "4113 Engineering"),
+            legal_jurisdiction=ido_anno.get("legal_jurisdiction", ""),
+            ownership_did=ido_anno.get("ownership_did", ""),
+            data_classification=ido_anno.get("data_classification", "unclassified"),
+            retention_days=int(ido_anno.get("retention_days", 3650)),
+        )
+        # Pass raster_path so GDAL GSD can be resolved
+        props.update(annotator.build_stac_ido_properties(prov, raster_path=raster_path))
 
         return props
 
@@ -232,14 +250,15 @@ class ProvenanceToSTACConverter:
             assets["data"]["checksum:multihash"] = output_hash
             assets["data"]["checksum:algorithm"] = output_hash_algo
 
-        # Include sibling TTL if present
+        # Include sibling TTL if present (may contain IDO triples appended by ido_annotator)
         ttl_sibling = provenance_json_path.replace("_provenance.json", "_provenance.ttl")
         if os.path.exists(ttl_sibling):
             assets["provenance_ttl"] = {
                 "href": os.path.basename(ttl_sibling),
                 "type": "text/turtle",
                 "roles": ["metadata"],
-                "title": "Processing provenance (RDF/Turtle)",
+                "title": "Processing provenance + IDO annotation (RDF/Turtle)",
+                "ido:ontology_uri": IDOAnnotator.IDO_ONTOLOGY_URI,
             }
 
         # Include GDAL AUX.XML if present
