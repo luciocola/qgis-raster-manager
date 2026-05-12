@@ -6763,36 +6763,10 @@ class _RegisterSettingsTabMixin:
         grp_bc.setLayout(gl_bc)
         root.addWidget(grp_bc)
 
-        # ── Fabric Gateway Configuration ─────────────────────────────────
-        grp_fabric = QGroupBox('Fabric Gateway Configuration')
-        gl_fabric = QVBoxLayout(grp_fabric)
-
-        self._reg_chk_bc_enable = QCheckBox('Enable Blockchain Storage')
-        gl_fabric.addWidget(self._reg_chk_bc_enable)
-
-        gw_info = QLabel(
-            'Fabric Gateway should be configured to connect to:\n'
-            '  • Peer: 49.13.87.234:7051\n'
-            '  • Channel: test\n'
-            '  • Chaincode: dq4ipt\n'
-            '  • Organisation: org1.example.com'
-        )
-        gw_info.setStyleSheet('QLabel { color: #666; padding: 6px; }')
-        gl_fabric.addWidget(gw_info)
-
-        gw_row = QHBoxLayout()
-        gw_row.addWidget(QLabel('Gateway URL:'))
-        self._reg_le_gateway_url = QLineEdit('http://localhost:3000')
-        self._reg_le_gateway_url.setPlaceholderText('http://gateway-host:3000')
-        gw_row.addWidget(self._reg_le_gateway_url)
-        gl_fabric.addLayout(gw_row)
-
         self._reg_btn_save = QPushButton('Save Settings')
         self._reg_btn_save.setMinimumHeight(32)
         self._reg_btn_save.clicked.connect(self._reg_save_settings)
-        gl_fabric.addWidget(self._reg_btn_save)
-
-        root.addWidget(grp_fabric)
+        root.addWidget(self._reg_btn_save)
         root.addStretch()
 
         # Populate current cert status
@@ -7038,10 +7012,6 @@ class _RegisterSettingsTabMixin:
         pwd = self._reg_le_p12_pwd.text()
         if pwd:
             qs.setValue('ipfs_imagery_uploader/p12_password', pwd)
-        qs.setValue('ipfs_imagery_uploader/gateway_url',
-                    self._reg_le_gateway_url.text().strip())
-        qs.setValue('ipfs_imagery_uploader/bc_enabled',
-                    self._reg_chk_bc_enable.isChecked())
         qs.sync()
         QMessageBox.information(self, 'Saved', 'Settings saved successfully.')
 
