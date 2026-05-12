@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 ido_annotator.py — Imagery Domain Ontology (IDO) integration for the
-General Raster Importer plugin.
+GIMI Imagery Workbench plugin.
 
 Exposes processed raster outputs as IDO MediaObject individuals and attaches
 an AnnotationLiabilityRecord drawn from the plugin's provenance dictionary.
@@ -55,7 +55,7 @@ _TTL_PREFIXES = """\
 class IDOAnnotator:
     """
     Generates IDO-conformant RDF triples and STAC properties for a processed
-    raster sidecar produced by the General Raster Importer.
+    raster sidecar produced by the GIMI Imagery Workbench.
 
     Instantiate once per conversion run:
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 4113Eng-wfs
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Main plugin class for QGIS Raster Manager
+Main plugin class for GIMI Imagery Workbench
 """
 import os
 from pathlib import Path
@@ -43,7 +43,7 @@ class HEIFTTLImporter:
         
         # Plugin variables
         self.actions = []
-        self.menu = '&QGIS Raster Manager'
+        self.menu = '&GIMI Imagery Workbench'
         self.toolbar = None
         self.dialog = None
     
@@ -77,7 +77,7 @@ class HEIFTTLImporter:
         
         if add_to_toolbar:
             if self.toolbar is None:
-                self.toolbar = self.iface.addToolBar('QGIS Raster Manager')
+                self.toolbar = self.iface.addToolBar('GIMI Imagery Workbench')
                 self.toolbar.setObjectName('QGISRasterManagerToolbar')
             self.toolbar.addAction(action)
         
@@ -95,7 +95,7 @@ class HEIFTTLImporter:
         
         self.add_action(
             icon_path,
-            text=self.tr('QGIS Raster Manager'),
+            text=self.tr('GIMI Imagery Workbench'),
             callback=self.run,
             parent=self.iface.mainWindow(),
             status_tip=self.tr('Import any GDAL-readable raster with optional TTL/RDF georeferencing'),
@@ -114,7 +114,7 @@ class HEIFTTLImporter:
     
     def log_message(self, message: str, level=Qgis.Info):
         """Log a message to QGIS message log"""
-        QgsMessageLog.logMessage(message, 'QGIS Raster Manager', level)
+        QgsMessageLog.logMessage(message, 'GIMI Imagery Workbench', level)
     
     def run(self):
         """Run the plugin"""
@@ -133,7 +133,20 @@ class HEIFTTLImporter:
         
         # Create dialog if not exists
         if self.dialog is None:
-            self.dialog = HEIFTTLImporterDialog(self.iface.mainWindow(), iface=self.iface)
+            try:
+                self.dialog = HEIFTTLImporterDialog(self.iface.mainWindow(), iface=self.iface)
+            except (AttributeError, Exception) as _dlg_err:
+                # Catch AttributeError: _ARRAY_API not found if a dialog dependency
+                # (hsi_adapter, dji_adapter, …) pulls in a C extension compiled for
+                # a different NumPy ABI than QGIS's embedded Python.
+                import traceback as _tb
+                _tb.print_exc()
+                QMessageBox.critical(
+                    self.iface.mainWindow(), 'GIMI Workbench',
+                    f'Could not create the dialog:\n{_dlg_err}\n\n'
+                    'See the QGIS Python console for details.'
+                )
+                return
         
         # Set import callback to trigger processing
         self.dialog.import_callback = self.process_import
@@ -160,9 +173,6 @@ class HEIFTTLImporter:
             # Determine metadata source (external TTL or internal RDF)
             parser = self.dialog.ttl_parser
             has_internal_rdf = self.dialog.has_internal_rdf
-            
-            # Update progress
-            self.dialog.progressBar.setValue(10)
             
             # Get GCPs based on metadata source
             if parser is not None:
@@ -304,7 +314,6 @@ class HEIFTTLImporter:
             output_path = os.path.join(output_dir, output_filename)
             
             # Update progress
-            self.dialog.progressBar.setValue(30)
             
             # Process HEIF with TTL - reuse processor from dialog to preserve internal RDF
             processor = self.dialog.heif_processor if self.dialog.heif_processor else HEIFProcessor()
@@ -331,7 +340,8 @@ class HEIFTTLImporter:
             )
             
             if not success:
-                raise Exception("Failed to process HEIF image")
+                err_detail = provenance.get('error', 'Check QGIS Python console for details.')
+                raise Exception(f"Failed to process HEIF image. {err_detail}") from None
             
             # Log provenance information
             self.log_message(f"Original UUID: {provenance.get('original_uuid')}")
@@ -350,7 +360,6 @@ class HEIFTTLImporter:
                     self.log_message("Warning: RDF provenance generation failed", level=Qgis.Warning)
             
             # Update progress
-            self.dialog.progressBar.setValue(90)
             
             # Add to map if requested
             if add_to_map:
@@ -369,7 +378,6 @@ class HEIFTTLImporter:
                     raise Exception("Created GeoTIFF is not valid")
             
             # Update progress
-            self.dialog.progressBar.setValue(100)
             
             # Show success message
             processing_info = "Orthorectified" if orthorectify else ("Warped" if warp else "Georeferenced")
@@ -398,9 +406,6 @@ class HEIFTTLImporter:
             # Store export info for package creation
             self.dialog.last_export_path = output_path
             self.dialog.last_provenance = provenance
-            
-            # Enable package button
-            self.dialog.btnCreatePackage.setEnabled(True)
 
             # Auto-load provenance into viewer
             provenance_file = provenance.get('provenance_file')
@@ -424,8 +429,5 @@ class HEIFTTLImporter:
             )
         
         finally:
-            # Reset progress bar
-            self.dialog.progressBar.setValue(0)
-            
             # Close dialog after import completes
             self.dialog.process_complete(success)

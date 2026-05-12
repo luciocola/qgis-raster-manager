@@ -26,9 +26,29 @@ try:
     # Register HEIF format with PIL
     register_heif_opener()
     HEIF_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError, Exception) as _heif_import_err:
+    # AttributeError: _ARRAY_API not found  →  pillow_heif C extension was
+    # compiled against a different NumPy ABI than QGIS's Python.  The plugin
+    # degrades gracefully; install pillow-heif via QGIS's own pip to fix:
+    #   /Applications/QGIS.app/Contents/MacOS/bin/pip3 install pillow-heif
+    import sys as _sys
+    # Purge any partial/broken module from the import cache so that
+    # subsequent 'import pillow_heif' inside methods won't get a stale
+    # broken module object and re-trigger the same crash.
+    _sys.modules.pop('pillow_heif', None)
+    _sys.modules.pop('pillow_heif._pillow_heif', None)
+    # Tombstone: future 'import pillow_heif' will raise ImportError immediately
+    # instead of re-executing the broken C extension init function.
+    _sys.modules['pillow_heif'] = None  # type: ignore[assignment]
+    print(f"[GIMI] pillow_heif unavailable: {_heif_import_err}", file=_sys.stderr)
     HEIF_AVAILABLE = False
     pillow_heif = None
+    try:
+        from PIL import Image
+    except (ImportError, AttributeError, Exception):
+        # PIL._imaging may also fail with AttributeError: _ARRAY_API not found
+        # if it was compiled against a different NumPy than QGIS provides.
+        Image = None
 
 try:
     import blake3
@@ -39,15 +59,58 @@ except ImportError:
 
 from osgeo import gdal, osr
 
+# ---------------------------------------------------------------------------
+# GDAL version helpers
+# ---------------------------------------------------------------------------
+
+def gdal_version_tuple() -> tuple:
+    """Return GDAL version as an (major, minor, patch) int tuple."""
+    ver = gdal.VersionInfo('VERSION_NUM')   # e.g. '3130000'
+    n = int(ver)
+    return (n // 1_000_000, (n % 1_000_000) // 10_000, (n % 10_000) // 100)
+
+
+# Minimum GDAL version required for JP2GROK driver support.
+_GDAL_313 = (3, 13, 0)
+
+
+def _gdal_has_driver(short_name: str) -> bool:
+    """Return True if a GDAL driver with *short_name* is compiled in."""
+    return gdal.GetDriverByName(short_name) is not None
+
+
+# JP2 driver preference order: Grok (highest throughput, GDAL ≥ 3.13) → Kakadu
+# (commercial) → ECW (commercial) → OpenJPEG (always present in QGIS builds)
+_JP2_PREFERENCE = ('JP2GROK', 'JP2KAK', 'JP2ECW', 'JP2OpenJPEG', 'JPEG2000')
+
+
+def preferred_jp2_driver() -> str:
+    """Return the short name of the best available GDAL JPEG-2000 write driver.
+
+    Preference order: **JP2GROK** (Grok, new in GDAL 3.13) → JP2KAK → JP2ECW
+    → JP2OpenJPEG → JPEG2000 (last resort).
+
+    Raises:
+        RuntimeError: if no JP2 driver is available in this GDAL build.
+    """
+    for drv in _JP2_PREFERENCE:
+        if _gdal_has_driver(drv):
+            return drv
+    raise RuntimeError(
+        'No JPEG-2000 write driver found in this GDAL build.\n'
+        'Install Grok (https://github.com/GrokImageCompression/grok) and rebuild GDAL '
+        '≥ 3.13 with -DGDAL_USE_GROK=ON, or install the JP2OpenJPEG driver.'
+    )
+
 # Import ISO 19115-4 metadata extractor
 try:
     from .iso19115_4_metadata import ISO19115_4MetadataExtractor
     ISO19115_4_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError, Exception):
     try:
         from iso19115_4_metadata import ISO19115_4MetadataExtractor
         ISO19115_4_AVAILABLE = True
-    except ImportError:
+    except (ImportError, AttributeError, Exception):
         ISO19115_4_AVAILABLE = False
 
 # Import the SWIG-generated libheif binding (optional — degrades gracefully)
@@ -59,6 +122,41 @@ except ImportError:
     except ImportError:
         _HeifContext = None  # type: ignore[assignment,misc]
         _SWIG_OK = False
+
+# OGC Moving Features drone attribute extractor (optional — degrades gracefully)
+try:
+    from .drone_mf_attributes import DroneMFAttributes
+    _DRONE_MF_AVAILABLE = True
+except ImportError:
+    try:
+        from drone_mf_attributes import DroneMFAttributes  # type: ignore[no-redef]
+        _DRONE_MF_AVAILABLE = True
+    except ImportError:
+        _DRONE_MF_AVAILABLE = False
+
+# HSI hyperspectral adapter (optional — degrades gracefully when the
+# asbestos_hsi_manager sibling plugin is absent)
+_HSI_ADAPTER_AVAILABLE: bool = False
+_HSI_AVAILABLE: bool = False
+try:
+    from .hsi_adapter import (          # type: ignore[import]
+        load_hsi_cube as _load_hsi_cube,
+        make_false_colour as _make_false_colour,
+        probe_hsi_file as _probe_hsi_file,
+        HSI_AVAILABLE as _HSI_AVAILABLE,
+    )
+    _HSI_ADAPTER_AVAILABLE = True
+except (ImportError, AttributeError, Exception):
+    try:
+        from hsi_adapter import (       # type: ignore[no-redef,import]
+            load_hsi_cube as _load_hsi_cube,
+            make_false_colour as _make_false_colour,
+            probe_hsi_file as _probe_hsi_file,
+            HSI_AVAILABLE as _HSI_AVAILABLE,
+        )
+        _HSI_ADAPTER_AVAILABLE = True
+    except (ImportError, AttributeError, Exception):
+        _HSI_ADAPTER_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Pure-Python minimal ISOBMFF box parser
@@ -652,6 +750,7 @@ class HEIFProcessor:
     # Mapping GDAL short driver name → display name
     _GDAL_FORMAT_FRIENDLY = {
         'GTiff':        'GeoTIFF',
+        'JP2GROK':      'JPEG2000 (Grok ★)',    # GDAL ≥ 3.13, highest throughput
         'JP2OpenJPEG':  'JPEG2000 (OpenJPEG)',
         'JP2KAK':       'JPEG2000 (Kakadu)',
         'JP2ECW':       'JPEG2000 (ECW)',
@@ -673,6 +772,7 @@ class HEIFProcessor:
         'GTiff':        ['.tfw', '.tifw', '.wld'],
         'PNG':          ['.pgw', '.pngw', '.wld'],
         'JPEG':         ['.jgw', '.jpgw', '.wld'],
+        'JP2GROK':      ['.j2w', '.jp2w', '.wld'],
         'JP2OpenJPEG':  ['.j2w', '.jp2w', '.wld'],
         'JP2KAK':       ['.j2w', '.jp2w', '.wld'],
         'JP2ECW':       ['.j2w', '.jp2w', '.wld'],
@@ -684,13 +784,23 @@ class HEIFProcessor:
                     creation_options: Optional[List[str]] = None) -> str:
         """Export *src_path* to *dst_path* using the given GDAL driver.
 
-        Supports any GDAL-writable raster driver (GTiff, COG, JP2OpenJPEG,
-        PNG, JPEG, HFA, ECW, NITF, GPKG, ENVI, VRT, netCDF, HDF5, Zarr …).
+        Supports any GDAL-writable raster driver (GTiff, COG, JP2GROK,
+        JP2OpenJPEG, PNG, JPEG, HFA, ECW, NITF, GPKG, ENVI, VRT, netCDF,
+        HDF5, Zarr …).
+
+        **JP2GROK** (Grok library, GDAL ≥ 3.13.0) is the recommended JPEG-2000
+        driver: it supports HTJ2K, TLM/PLT random-access markers, multi-level
+        tile caching and is 3–5× faster than OpenJPEG for large imagery.
+        Install Grok from https://github.com/GrokImageCompression/grok and
+        rebuild (or obtain) GDAL ≥ 3.13 with ``-DGDAL_USE_GROK=ON``.
 
         Args:
             src_path:         Absolute path to the source raster (any GDAL-readable format).
             dst_path:         Absolute path for the output file.
-            driver:           GDAL short driver name, e.g. ``'GTiff'``, ``'COG'``, ``'JP2OpenJPEG'``.
+            driver:           GDAL short driver name, e.g. ``'GTiff'``, ``'COG'``,
+                              ``'JP2GROK'``, ``'JP2OpenJPEG'``.
+                              Pass the string ``'JP2'`` to auto-select the best
+                              available JPEG-2000 driver via :func:`preferred_jp2_driver`.
             creation_options: List of GDAL creation-option strings in ``KEY=VALUE`` form.
                               ``None`` uses sensible defaults per driver.
 
@@ -702,10 +812,17 @@ class HEIFProcessor:
         """
         creation_options = creation_options or []
 
+        # Resolve the 'JP2' alias to whichever JP2 driver is best available
+        if driver == 'JP2':
+            driver = preferred_jp2_driver()
+            print(f"[export_gdal] JP2 alias resolved to driver: {driver}")
+
         # Per-driver sensible defaults when caller provides none
         _DEFAULTS: dict = {
             "GTiff":       ["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"],
             "COG":         ["COMPRESS=DEFLATE", "OVERVIEW_RESAMPLING=NEAREST"],
+            # Grok JP2GROK defaults: lossless, TLM+PLT for random-access, RLCP progression
+            "JP2GROK":     ["REVERSIBLE=YES", "PLT=YES", "TLM=YES", "PROG=RLCP"],
             "JP2OpenJPEG": [],
             "JPEG":        ["QUALITY=95"],
             "GPKG":        ["TILE_FORMAT=PNG"],
@@ -746,32 +863,36 @@ class HEIFProcessor:
     def _heif_to_gdal_mem(self, heif_path: str):
         """Convert a HEIF file to an in-memory GDAL dataset via pillow-heif.
 
-        Used as a fallback when the installed GDAL does not include a HEIF driver.
+        Uses PIL split()+tobytes() to avoid any NumPy C-API dependency,
+        preventing the ``_ARRAY_API not found`` ABI-mismatch error that
+        occurs when pillow-heif is installed for a different Python/NumPy
+        than the one embedded in QGIS.
 
         Returns:
             A GDAL in-memory Dataset, or None on failure.
         """
-        if not HEIF_AVAILABLE:
+        if not HEIF_AVAILABLE or Image is None:
             return None
         try:
-            import numpy as np
-            import pillow_heif as _ph
-            hf = _ph.open_heif(heif_path)
-            if len(hf) == 0:
-                return None
-            img = hf[0]
-            arr = np.frombuffer(img.data, dtype=np.uint8)
-            w, h = img.size
-            bands = len(img.mode)
-            arr = arr.reshape(h, w, bands)
+            # PIL can open HEIF because register_heif_opener() was called.
+            # We never touch NumPy here — WriteRaster accepts plain bytes.
+            pil_img = Image.open(heif_path)
+            # Normalise to RGB or RGBA; discard palette / P modes
+            if pil_img.mode not in ('RGB', 'RGBA', 'L'):
+                pil_img = pil_img.convert('RGB')
+            w, h = pil_img.size
+            band_images = pil_img.split()   # list of single-band PIL images
+            bands = len(band_images)
 
-            mem_driver = gdal.GetDriverByName("MEM")
-            ds = mem_driver.Create("", w, h, bands, gdal.GDT_Byte)
-            for b in range(bands):
-                ds.GetRasterBand(b + 1).WriteArray(arr[:, :, b])
+            mem_driver = gdal.GetDriverByName('MEM')
+            ds = mem_driver.Create('', w, h, bands, gdal.GDT_Byte)
+            for b, band_img in enumerate(band_images):
+                ds.GetRasterBand(b + 1).WriteRaster(
+                    0, 0, w, h, band_img.tobytes()
+                )
             return ds
         except Exception as e:
-            print(f"[_heif_to_gdal_mem] {e}")
+            print(f'[_heif_to_gdal_mem] {e}')
             return None
 
     def probe_raster_format(self, path: str) -> dict:
@@ -880,16 +1001,18 @@ class HEIFProcessor:
 
             if result['is_heif']:
                 # Try to get image dimensions via pillow_heif
-                try:
-                    import pillow_heif as _ph
-                    hf = _ph.open_heif(path)
-                    if len(hf) > 0:
-                        img = hf[0]
-                        result['width']  = img.size[0]
-                        result['height'] = img.size[1]
-                        result['band_count'] = len(img.mode)
-                except Exception:
-                    pass
+                # Use the module-level 'pillow_heif' variable (None if unavailable)
+                # to avoid re-triggering the _ARRAY_API ABI crash on re-import.
+                if HEIF_AVAILABLE and pillow_heif is not None:
+                    try:
+                        hf = pillow_heif.open_heif(path)
+                        if len(hf) > 0:
+                            img = hf[0]
+                            result['width']  = img.size[0]
+                            result['height'] = img.size[1]
+                            result['band_count'] = len(img.mode)
+                    except Exception:
+                        pass
 
                 # Geo check: embedded RDF counts as potential geo source (not confirmed geo)
                 if self.has_internal_rdf(path):
@@ -1225,8 +1348,8 @@ class HEIFProcessor:
         # ------------------------------------------------------------------
         # HEIF path — original implementation follows
         # ------------------------------------------------------------------
-        if not HEIF_AVAILABLE:
-            return "ERROR: pillow-heif not installed. Install with: pip install pillow-heif"
+        if not HEIF_AVAILABLE or pillow_heif is None:
+            return "ERROR: pillow-heif not installed or not compatible with this QGIS Python. Install with:\n  /Applications/QGIS.app/Contents/MacOS/bin/pip3 install pillow-heif"
 
         structure = []
         structure.append("=" * 80)
@@ -1235,7 +1358,8 @@ class HEIFProcessor:
         structure.append("")
         
         try:
-            import pillow_heif
+            # Use module-level pillow_heif (already imported; avoids re-import ABI crash)
+            _pillow_heif = pillow_heif
             
             # Get file size
             file_size = os.path.getsize(heif_path)
@@ -1243,7 +1367,7 @@ class HEIFProcessor:
             structure.append("")
             
             # Open HEIF file with pillow_heif
-            heif_file = pillow_heif.open_heif(heif_path)
+            heif_file = _pillow_heif.open_heif(heif_path)
             
             # File-level information
             structure.append("FILE INFORMATION:")
@@ -1695,163 +1819,117 @@ class HEIFProcessor:
             traceback.print_exc()
             return None
 
+    def _gdal_heif_to_tiff(self, heif_path: str, output_path: str) -> bool:
+        """Try to convert a HEIF file to TIFF using QGIS's bundled GDAL.
+
+        QGIS ships GDAL ≥ 3.2 which includes an HEIF/AVIF read driver.
+        This path uses NO numpy and NO pillow_heif, so it is immune to
+        the ``_ARRAY_API not found`` ABI-mismatch crash.
+
+        Returns True on success, False otherwise.
+        """
+        try:
+            ds = gdal.Open(heif_path, gdal.GA_ReadOnly)
+            if ds is None:
+                return False
+            driver = gdal.GetDriverByName('GTiff')
+            if driver is None:
+                return False
+            out_ds = driver.CreateCopy(
+                output_path, ds,
+                options=['COMPRESS=LZW', 'TILED=YES'],
+            )
+            if out_ds is None:
+                return False
+            out_ds.FlushCache()
+            out_ds = None
+            ds = None
+            print(f"[GDAL] HEIF → TIFF: {output_path}")
+            return True
+        except Exception as e:
+            print(f"[_gdal_heif_to_tiff] {e}")
+            return False
+
     def convert_heif_to_tiff(self, heif_path: str, output_path: Optional[str] = None) -> Optional[str]:
         """
-        Convert HEIF image to TIFF format
-        
+        Convert HEIF image to TIFF format.
+
+        Conversion order (first success wins):
+          1. GDAL built-in HEIF driver  (QGIS bundled GDAL ≥ 3.2, no numpy)
+          2. pillow-heif via PIL Image  (requires compatible pillow-heif install)
+          3. heif-convert command line  (requires ``brew install libheif``)
+
         Args:
             heif_path: Path to input HEIF file
             output_path: Optional output path. If None, creates temp file
-            
+
         Returns:
             Path to output TIFF file or None on error
         """
-        if not HEIF_AVAILABLE:
-            print("ERROR: pillow-heif not installed. Install with: pip install pillow-heif")
-            # Try heif-convert as fallback
-            if self.check_heif_convert_available():
-                print("Attempting conversion with heif-convert...")
-                png_path = self.convert_heif_with_libheif(heif_path)
-                if png_path:
-                    # Convert PNG to TIFF
-                    try:
-                        img = Image.open(png_path)
-                        if output_path is None:
-                            temp_file = tempfile.NamedTemporaryFile(suffix='.tif', delete=False)
-                            output_path = temp_file.name
-                            temp_file.close()
-                            self.temp_files.append(output_path)
-                        img.save(output_path, 'TIFF', compression='lzw')
-                        return output_path
-                    except Exception as e:
-                        print(f"Error converting PNG to TIFF: {e}")
-            return None
-            
-        try:
-            # Ensure HEIF opener is registered
-            try:
-                from pillow_heif import register_heif_opener
-                register_heif_opener()
-            except Exception as e:
-                print(f"Warning: Could not register HEIF opener: {e}")
-            
-            # Try to open HEIF image with PIL
+        # ── Ensure we have a temp output path ready ───────────────────
+        if output_path is None:
+            temp_file = tempfile.NamedTemporaryFile(suffix='.tif', delete=False)
+            output_path = temp_file.name
+            temp_file.close()
+            self.temp_files.append(output_path)
+
+        # ── Path 1: GDAL (always available in QGIS, no pillow_heif) ──
+        print(f"[HEIF→TIFF] Trying GDAL driver for {os.path.basename(heif_path)} …")
+        if self._gdal_heif_to_tiff(heif_path, output_path):
+            return output_path
+        print("[HEIF→TIFF] GDAL driver unavailable or failed; trying pillow-heif …")
+
+        # ── Path 2: pillow-heif (guarded against ABI/numpy mismatch) ─
+        if HEIF_AVAILABLE and pillow_heif is not None:
             img = None
             try:
-                img = Image.open(heif_path)
-            except Exception as img_error:
-                # Try with pillow_heif directly as fallback
-                print(f"PIL Image.open failed: {img_error}")
-                print("Trying pillow_heif direct method...")
+                # Register HEIF opener using the module-level pillow_heif object
+                # (avoids re-triggering _ARRAY_API crash on deferred import)
                 try:
-                    import pillow_heif
+                    pillow_heif.register_heif_opener()
+                except Exception:
+                    pass
+
+                # Try PIL Image.open first (uses registered heif opener)
+                try:
+                    img = Image.open(heif_path)
+                except Exception as img_error:
+                    print(f"[HEIF→TIFF] PIL Image.open failed: {img_error}")
+                    # Fallback: pillow_heif direct API
                     heif_file = pillow_heif.open_heif(heif_path)
-                    
-                    # Check if file contains any images
                     if len(heif_file) == 0:
-                        print("WARNING: HEIF file contains 0 images detected by pillow_heif")
-                        print("Attempting conversion with heif-convert...")
-                        
-                        # Try heif-convert as final fallback
-                        if self.check_heif_convert_available():
-                            png_path = self.convert_heif_with_libheif(heif_path)
-                            if png_path:
-                                # Convert PNG to TIFF
-                                img = Image.open(png_path)
-                                # Continue with normal flow below
-                            else:
-                                error_msg = (
-                                    "Cannot decode HEIF image. The file contains image data but uses "
-                                    "an unsupported codec (likely uncompressed 'unci' format).\n\n"
-                                    "This is a limitation of the available HEIF libraries. "
-                                    "Please request a HEVC-compressed version of this image from your data provider."
-                                )
-                                raise Exception(error_msg)
-                        else:
-                            print("heif-convert not available. Install with: brew install libheif")
-                            error_msg = (
-                                "Cannot decode HEIF image. Install libheif tools: brew install libheif"
-                            )
-                            raise Exception(error_msg)
-                    else:
-                        # Get first image
-                        try:
-                            img = pillow_heif.to_pillow(heif_file[0])
-                        except RuntimeError as load_error:
-                            # Check if this is a codec support issue (e.g., JPEG2000)
-                            if "compression format has not been built in" in str(load_error):
-                                print(f"pillow-heif lacks decoder for this codec: {load_error}")
-                                print("Attempting conversion with heif-convert...")
-                                
-                                if self.check_heif_convert_available():
-                                    png_path = self.convert_heif_with_libheif(heif_path)
-                                    if png_path:
-                                        img = Image.open(png_path)
-                                    else:
-                                        raise Exception(f"heif-convert failed to decode file: {load_error}")
-                                else:
-                                    raise Exception(
-                                        f"HEIF file uses codec not supported by pillow-heif: {load_error}\n"
-                                        f"Install libheif tools for decoding: brew install libheif"
-                                    )
-                            else:
-                                raise
-                except Exception as heif_error:
-                    print(f"pillow_heif direct method also failed: {heif_error}")
-                    
-                    # Try heif-convert as final fallback
-                    if self.check_heif_convert_available():
-                        print("Attempting conversion with heif-convert as final fallback...")
-                        png_path = self.convert_heif_with_libheif(heif_path)
-                        if png_path:
-                            # Verify PNG file exists and has content
-                            if not os.path.exists(png_path):
-                                raise Exception(f"heif-convert output file not found: {png_path}")
-                            
-                            file_size = os.path.getsize(png_path)
-                            if file_size == 0:
-                                raise Exception(f"heif-convert created empty file: {png_path}")
-                            
-                            print(f"  PNG file created: {file_size:,} bytes")
-                            
-                            # Try to open with explicit format
-                            try:
-                                with open(png_path, 'rb') as f:
-                                    img = Image.open(f)
-                                    img.load()  # Force load to verify it's readable
-                            except Exception as png_error:
-                                print(f"  Failed to load PNG: {png_error}")
-                                raise Exception(f"heif-convert created unreadable PNG file: {png_error}")
-                        else:
-                            raise heif_error
-                    else:
-                        raise
-            
-            if img is None:
-                print("ERROR: Could not load image from HEIF file")
-                return None
-            
-            # Convert to RGB if needed
-            if img.mode not in ('RGB', 'L'):
-                img = img.convert('RGB')
-            
-            # Determine output path
-            if output_path is None:
-                temp_file = tempfile.NamedTemporaryFile(suffix='.tif', delete=False)
-                output_path = temp_file.name
-                temp_file.close()
-                self.temp_files.append(output_path)
-            
-            # Save as TIFF
-            img.save(output_path, 'TIFF', compression='lzw')
-            
-            print(f"Converted HEIF to TIFF: {output_path}")
-            return output_path
-            
-        except Exception as e:
-            print(f"Error converting HEIF to TIFF: {e}")
-            return None
-    
+                        raise Exception(
+                            "HEIF file contains no decodable images. "
+                            "Try: brew install libheif  and retry."
+                        )
+                    img = pillow_heif.to_pillow(heif_file[0])
+
+                if img is not None:
+                    if img.mode not in ('RGB', 'L'):
+                        img = img.convert('RGB')
+                    img.save(output_path, 'TIFF', compression='lzw')
+                    print(f"[HEIF→TIFF] pillow-heif succeeded: {output_path}")
+                    return output_path
+
+            except Exception as e:
+                print(f"[HEIF→TIFF] pillow-heif path failed: {e}")
+
+        # ── Path 3: heif-convert command line ─────────────────────────
+        print("[HEIF→TIFF] Trying heif-convert …")
+        if self.check_heif_convert_available():
+            png_path = self.convert_heif_with_libheif(heif_path)
+            if png_path and os.path.exists(png_path) and os.path.getsize(png_path) > 0:
+                try:
+                    if Image is not None:
+                        pil_img = Image.open(png_path)
+                        pil_img.save(output_path, 'TIFF', compression='lzw')
+                        print(f"[HEIF→TIFF] heif-convert succeeded: {output_path}")
+                        return output_path
+                except Exception as e:
+                    print(f"[HEIF→TIFF] PNG→TIFF via PIL failed: {e}")
+        print("[HEIF→TIFF] All conversion paths failed for: " + os.path.basename(heif_path))
+        return None
+
     def convert_heif_to_jp2(self, heif_path: str, output_path: Optional[str] = None, 
                            lossless: bool = True) -> Optional[str]:
         """
@@ -2095,13 +2173,15 @@ class HEIFProcessor:
                 print(f"Could not create {output_path}")
                 return False
             
-            # Copy raster data
+            # Copy raster data — use ReadRaster/WriteRaster to avoid
+            # gdal_array (numpy bridge) which crashes when the GDAL C extension
+            # was compiled for a different NumPy ABI than the running interpreter.
             for band_idx in range(1, bands + 1):
                 src_band = src_ds.GetRasterBand(band_idx)
                 dst_band = dst_ds.GetRasterBand(band_idx)
-                data = src_band.ReadAsArray()
-                dst_band.WriteArray(data)
-                
+                raw = src_band.ReadRaster(0, 0, width, height)
+                dst_band.WriteRaster(0, 0, width, height, raw)
+
                 # Copy color interpretation
                 dst_band.SetColorInterpretation(src_band.GetColorInterpretation())
             
@@ -2547,7 +2627,17 @@ class HEIFProcessor:
                     print(f"Warning: Could not extract ISO 19115-4 metadata: {e}")
             else:
                 print("ISO 19115-4 metadata extractor not available")
-            
+
+            # Extract OGC Moving Features drone attributes from EXIF/XMP
+            if _DRONE_MF_AVAILABLE:
+                try:
+                    drone_attrs = self._extract_drone_mf_attrs(heif_path)
+                    if drone_attrs is not None:
+                        provenance["drone_moving_feature"] = drone_attrs.to_dict()
+                        print("✓ Drone MF attributes added to provenance")
+                except Exception as _dmf_err:
+                    print(f"Warning: Could not extract drone MF attributes: {_dmf_err}")
+
             # Save provenance metadata as sidecar JSON
             file_ext = '.jp2' if output_path.endswith('.jp2') else '.tif'
             provenance_file = output_path.replace(file_ext, '_provenance.json')
@@ -2562,6 +2652,320 @@ class HEIFProcessor:
         except Exception as e:
             print(f"Error processing HEIF with TTL: {e}")
             return False, provenance
+
+    # ------------------------------------------------------------------
+    # HSI → GIMI conversion
+    # ------------------------------------------------------------------
+
+    def convert_hsi_to_gimi(
+        self,
+        hsi_path: str,
+        output_heif: str,
+        output_cube: Optional[str] = None,
+        false_colour_method: str = 'pca',
+        cube_driver: str = 'GTiff',
+        original_uuid: Optional[str] = None,
+    ) -> Tuple[bool, Dict]:
+        """Convert a hyperspectral (HSI) cube to GIMI format.
+
+        Produces
+        --------
+        1. A HEIF file with a 3-band false-colour browse image (PCA or
+           band-select), written via pillow-heif.
+        2. (optional) Full spectral cube exported via ``export_gdal()``
+           (GeoTIFF, JP2GROK, …).  Wavelength metadata is written into each
+           GDAL band via ``SetMetadataItem('wavelength', …)``.
+        3. A ``*_provenance.json`` sidecar with spectral metadata, hashes, and
+           UUIDs suitable for downstream STAC generation.
+
+        Args
+        ----
+        hsi_path:             Path to input HSI file (ENVI .hdr/.bil/.bsq,
+                              multi-band GeoTIFF, HDF5, …).
+        output_heif:          Destination path for the HEIF browse image.
+        output_cube:          Optional destination for the full spectral cube.
+                              If None the cube is not written.
+        false_colour_method:  ``'pca'`` (default) or ``'band_select'``.
+        cube_driver:          GDAL short driver name for cube export
+                              (e.g. ``'GTiff'``, ``'JP2GROK'``, ``'JP2'``).
+        original_uuid:        Provenance UUID; auto-generated when None.
+
+        Returns
+        -------
+        (success, provenance_dict)
+        """
+        if not _HSI_ADAPTER_AVAILABLE:
+            return False, {
+                "error": (
+                    "hsi_adapter not available. "
+                    "Install the asbestos_hsi_manager plugin or check that "
+                    "hsi_adapter.py is present in the plugin directory."
+                )
+            }
+
+        if original_uuid is None:
+            original_uuid = str(uuid.uuid4())
+        derived_uuid = str(uuid.uuid4())
+        ts = datetime.now(timezone.utc).isoformat()
+
+        input_hash, input_hash_algo = self.calculate_file_hash(hsi_path)
+
+        provenance: Dict = {
+            "original_uuid":        original_uuid,
+            "derived_uuid":         derived_uuid,
+            "algorithm_name":       f"HSI→GIMI false-colour ({false_colour_method})",
+            "processing_timestamp": ts,
+            "input_file":           os.path.basename(hsi_path),
+            "input_hash":           input_hash,
+            "input_hash_algorithm": input_hash_algo,
+            "output_file":          os.path.basename(output_heif),
+        }
+
+        try:
+            # ── Step 1: load cube ──────────────────────────────────────
+            print(f"[HSI→GIMI] Step 1: loading cube {os.path.basename(hsi_path)} …")
+            cube, wavelengths, crs_wkt, geotransform = _load_hsi_cube(hsi_path)
+            if cube is None:
+                raise RuntimeError(
+                    "Could not load HSI cube.\n"
+                    "Supported formats: multi-band GeoTIFF, ENVI .hdr/.bil/.bsq/.bip, HDF5.\n"
+                    "Ensure GDAL is installed and the file is not corrupted."
+                )
+
+            bands, h, w = cube.shape
+            spectral_range = (
+                [min(wavelengths), max(wavelengths)]
+                if wavelengths and len(wavelengths) == bands
+                else None
+            )
+
+            provenance["hsi"] = {
+                "band_count":        bands,
+                "width":             w,
+                "height":            h,
+                "wavelengths_nm":    wavelengths,
+                "spectral_range_nm": spectral_range,
+                "false_colour_method": false_colour_method,
+                "cube_driver":       cube_driver,
+                "cube_file":         os.path.basename(output_cube) if output_cube else None,
+            }
+
+            # ── Step 2: false-colour browse image ─────────────────────
+            print(f"[HSI→GIMI] Step 2: false-colour ({false_colour_method}) …")
+            fc = _make_false_colour(cube, wavelengths, method=false_colour_method)
+            if fc is None:
+                raise RuntimeError(
+                    "make_false_colour returned None. "
+                    "The cube may contain NaN/Inf values or have fewer than 3 bands."
+                )
+
+            if not HEIF_AVAILABLE:
+                raise RuntimeError(
+                    "pillow-heif is required to write HEIF output.\n"
+                    "Install with: pip install pillow-heif"
+                )
+
+            os.makedirs(os.path.dirname(os.path.abspath(output_heif)), exist_ok=True)
+
+            try:
+                from PIL import Image as _PILImage
+            except (ImportError, AttributeError, Exception):
+                _PILImage = None
+            # Use module-level pillow_heif to avoid re-import ABI crash
+            _ph = pillow_heif
+            if _ph is None or _PILImage is None:
+                raise RuntimeError(
+                    "HEIF browse image export requires pillow and pillow-heif. "
+                    "Install via QGIS Python: pip install pillow pillow-heif"
+                )
+            _ph.register_heif_opener()
+
+            browse_img = _PILImage.fromarray(fc, mode='RGB')
+            browse_img.save(output_heif, format='HEIF')
+            print(f"[HSI→GIMI] Browse image written: {output_heif}")
+
+            # ── Step 3: full spectral cube (optional) ─────────────────
+            if output_cube:
+                print(f"[HSI→GIMI] Step 3: exporting full cube ({cube_driver}) …")
+                from osgeo import gdal as _gdal
+
+                # Write intermediate multi-band GeoTIFF
+                tmp = tempfile.NamedTemporaryFile(suffix='_hsi_cube.tif', delete=False)
+                tmp_path = tmp.name
+                tmp.close()
+                self.temp_files.append(tmp_path)
+
+                gtiff_drv = _gdal.GetDriverByName('GTiff')
+                out_ds = gtiff_drv.Create(
+                    tmp_path, w, h, bands, _gdal.GDT_Float32,
+                    ['COMPRESS=LZW', 'TILED=YES'],
+                )
+                if out_ds is None:
+                    raise RuntimeError(f"GDAL could not create temp GeoTIFF: {tmp_path}")
+
+                if geotransform:
+                    out_ds.SetGeoTransform(geotransform)
+                if crs_wkt:
+                    out_ds.SetProjection(crs_wkt)
+
+                for b in range(bands):
+                    band_obj = out_ds.GetRasterBand(b + 1)
+                    # WriteArray requires gdal_array (numpy bridge) which crashes on
+                    # NumPy ABI mismatch in QGIS-LTR. Use WriteRaster with raw bytes.
+                    band_obj.WriteRaster(0, 0, w, h,
+                                         cube[b].astype('float32').tobytes(),
+                                         buf_type=_gdal.GDT_Float32)
+                    if wavelengths and len(wavelengths) > b:
+                        band_obj.SetMetadataItem('wavelength',       str(wavelengths[b]))
+                        band_obj.SetMetadataItem('wavelength_units', 'nanometers')
+                out_ds.FlushCache()
+                out_ds = None
+
+                # Transcode to target driver
+                os.makedirs(os.path.dirname(os.path.abspath(output_cube)), exist_ok=True)
+                if cube_driver not in ('GTiff', 'GeoTIFF'):
+                    self.export_gdal(tmp_path, output_cube, cube_driver)
+                else:
+                    import shutil
+                    shutil.copy2(tmp_path, output_cube)
+
+                cube_hash, cube_hash_algo = self.calculate_file_hash(output_cube)
+                provenance["hsi"]["cube_hash"]           = cube_hash
+                provenance["hsi"]["cube_hash_algorithm"] = cube_hash_algo
+                print(f"[HSI→GIMI] Cube written: {output_cube}")
+
+            # ── Step 4: provenance sidecar ─────────────────────────────
+            output_hash, output_hash_algo = self.calculate_file_hash(output_heif)
+            provenance["output_hash"]           = output_hash
+            provenance["output_hash_algorithm"] = output_hash_algo
+
+            prov_file = os.path.splitext(output_heif)[0] + '_provenance.json'
+            with open(prov_file, 'w', encoding='utf-8') as fh:
+                json.dump(provenance, fh, indent=2)
+            provenance['provenance_file'] = prov_file
+
+            print(f"[HSI→GIMI] ✓ Done.  Provenance: {prov_file}")
+            return True, provenance
+
+        except Exception as exc:
+            import traceback
+            print(f"[HSI→GIMI] Error: {exc}")
+            traceback.print_exc()
+            provenance['error'] = str(exc)
+            return False, provenance
+
+    def _extract_drone_mf_attrs(self, image_path: str,
+                                track_id: str = "",
+                                mqtt_client_id: str = "",
+                                mqtt_topic: str = "",
+                                mqtt_broker: str = "",
+                                mission_id: str = "") -> "Optional[DroneMFAttributes]":
+        """Try to extract OGC Moving Features drone attributes from *image_path*.
+
+        Tries, in order:
+          1. DJI adapter (``dji_drone_processor.exif_utils.scan_image_folder``)
+             which reads DJI-specific XMP tags (FlightYawDegree, GimbalPitchDegree, …).
+          2. Pillow-based raw EXIF + XMP dict scrape via ``DroneMFAttributes.from_xmp_dict``.
+
+        Returns a ``DroneMFAttributes`` instance when *any* drone attribute is found,
+        or ``None`` when the file contains no drone metadata.  All unresolvable
+        fields are left as ``None`` / ``""``.
+        """
+        if not _DRONE_MF_AVAILABLE:
+            return None
+
+        tid = track_id or os.path.splitext(os.path.basename(image_path))[0]
+
+        # ── Path 1: DJI adapter ───────────────────────────────────────────────
+        try:
+            from .dji_adapter import scan_image_folder, DJI_AVAILABLE
+        except ImportError:
+            try:
+                from dji_adapter import scan_image_folder, DJI_AVAILABLE  # type: ignore[no-redef]
+            except ImportError:
+                DJI_AVAILABLE = False
+
+        if DJI_AVAILABLE:
+            try:
+                folder = os.path.dirname(os.path.abspath(image_path))
+                filename = os.path.basename(image_path)
+                metas = scan_image_folder(folder)
+                meta = next((m for m in metas if os.path.basename(m.path) == filename), None)
+                if meta is not None and meta.is_valid():
+                    return DroneMFAttributes.from_dji_meta(
+                        meta,
+                        track_id     = tid,
+                        mqtt_client_id = mqtt_client_id,
+                        mqtt_topic   = mqtt_topic,
+                        mqtt_broker  = mqtt_broker,
+                        mission_id   = mission_id,
+                    )
+            except Exception as _e:
+                print(f"[_extract_drone_mf_attrs] DJI adapter failed: {_e}")
+
+        # ── Path 2: raw EXIF / XMP scrape via Pillow ──────────────────────────
+        try:
+            from PIL import Image as _PILImage, ExifTags as _ExifTags
+            pil_img = _PILImage.open(image_path)
+
+            # Build a flat key→value dict from all available EXIF / XMP data
+            xmp_dict: dict = {}
+
+            # EXIF numeric tags → tag-name keys
+            try:
+                raw_exif = pil_img.getexif()
+                for tag_id, val in raw_exif.items():
+                    name = _ExifTags.TAGS.get(tag_id, str(tag_id))
+                    xmp_dict[name] = val
+                # GPS sub-IFD
+                gps_ifd = raw_exif.get_ifd(0x8825)  # GPSInfo
+                for tag_id, val in gps_ifd.items():
+                    name = _ExifTags.GPSTAGS.get(tag_id, str(tag_id))
+                    xmp_dict[name] = val
+            except Exception:
+                pass
+
+            # XMP bytes embedded in the image info dict (pillow-heif / HEIF)
+            try:
+                xmp_bytes = pil_img.info.get("xmp") or b""
+                if xmp_bytes:
+                    xmp_str = xmp_bytes.decode("utf-8", errors="ignore")
+                    # Quick regex scrape of drone-dji: attributes
+                    import re as _re
+                    for m in _re.finditer(r'(?:drone-dji:|Camera:)(\w+)="([^"]*)"', xmp_str):
+                        xmp_dict[m.group(1)] = m.group(2)
+                    # GPS decimal from XMP (fallback when no EXIF GPS IFD)
+                    for tag in ("GPSLatitude", "GPSLongitude"):
+                        m2 = _re.search(rf'{tag}="([^"]*)"', xmp_str)
+                        if m2 and tag not in xmp_dict:
+                            xmp_dict[tag] = m2.group(1)
+            except Exception:
+                pass
+
+            # Only return attrs if at least one drone-specific field was found
+            drone_keys = {
+                "FlightYawDegree", "FlightPitchDegree", "FlightRollDegree",
+                "GimbalYawDegree", "GimbalPitchDegree", "GimbalRollDegree",
+                "RelativeAltitude", "BatteryLevel", "FlightTime",
+            }
+            if drone_keys & set(xmp_dict.keys()):
+                model  = str(xmp_dict.get("Model", "") or "")
+                serial = str(xmp_dict.get("SerialNumber", "") or "")
+                return DroneMFAttributes.from_xmp_dict(
+                    xmp_dict,
+                    track_id       = tid,
+                    model          = model,
+                    serial         = serial,
+                    mqtt_client_id = mqtt_client_id,
+                    mqtt_topic     = mqtt_topic,
+                    mqtt_broker    = mqtt_broker,
+                    mission_id     = mission_id,
+                    image_path     = image_path,
+                )
+        except Exception as _e:
+            print(f"[_extract_drone_mf_attrs] Pillow scrape failed: {_e}")
+
+        return None
 
     def _compute_gdal_statistics(self, output_path: str) -> None:
         """
@@ -2982,7 +3386,7 @@ class HEIFProcessor:
                     cmd.extend(['--uncompressed'])
                 elif compression == 'av1':
                     cmd.extend(['-e', 'av1'])
-                elif compression == 'jpeg2000':
+                elif compression in ('jpeg2000', 'jp2 grok'):
                     cmd.extend(['--jpeg2000'])
                 elif compression == 'htj2k':
                     cmd.extend(['--htj2k'])

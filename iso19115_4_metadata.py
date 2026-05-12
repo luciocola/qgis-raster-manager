@@ -15,8 +15,16 @@ References:
 import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
-from PIL import Image
 import json
+
+# PIL is imported lazily to avoid _ARRAY_API ABI crash when pillow was
+# installed for a different Python/NumPy than QGIS's embedded interpreter.
+try:
+    from PIL import Image as _PILImage
+    _PIL_AVAILABLE = True
+except (ImportError, AttributeError, Exception):
+    _PILImage = None
+    _PIL_AVAILABLE = False
 
 
 class ISO19115_4MetadataExtractor:

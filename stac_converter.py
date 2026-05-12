@@ -41,6 +41,8 @@ class ProvenanceToSTACConverter:
         "https://stac-extensions.github.io/processing/v1.1.0/schema.json",
         "https://stac-extensions.github.io/eo/v1.1.0/schema.json",
         IDOAnnotator.IDO_EXTENSION_URI,  # Imagery Domain Ontology v1.1.0
+        "https://luciocola.github.io/stac-extension-liability-claims/v1.6.0/schema.json",
+        "https://stac-extensions.github.io/cop/v1.0.0/schema.json",  # COP drone: fields
     ]
 
     # Map _provenance.json quality report types → STAC property names
@@ -208,9 +210,129 @@ class ProvenanceToSTACConverter:
             retention_days=int(ido_anno.get("retention_days", 3650)),
         )
         # Pass raster_path so GDAL GSD can be resolved
-        props.update(annotator.build_stac_ido_properties(prov, raster_path=raster_path))
+        ido_props = annotator.build_stac_ido_properties(prov, raster_path=raster_path)
+        props.update(ido_props)
+
+        # -- liability-claims v1.6.0 fields ---------------------------------
+        responsible_party_name = ido_anno.get("responsible_party", "4113 Engineering")
+        resp_party: dict = {
+            "name": responsible_party_name,
+            "role": ido_anno.get("role", "originator"),
+        }
+        if ido_anno.get("email"):
+            resp_party["email"] = ido_anno["email"]
+        if ido_anno.get("url"):
+            resp_party["url"] = ido_anno["url"]
+        if ido_anno.get("ownership_did"):
+            resp_party["did"] = ido_anno["ownership_did"]
+        props["liability:responsible_party"] = resp_party
+
+        props["liability:origin"] = prov.get("algorithm_name", "HEIF TTL Importer")
+
+        niirs_val = ido_props.get("ido:niirs_estimated")
+        if niirs_val is not None:
+            niirs_obj: dict = {
+                "overall": niirs_val,
+                "evaluation_method": "giqe_prediction",
+            }
+            gsd = ido_props.get("ido:gsd_metres")
+            if gsd is not None:
+                niirs_obj["giqe_parameters"] = {"gsd": gsd}
+            props["liability:niirs"] = niirs_obj
+
+        iso_q_reports = iso.get("quality", [])
+        if iso_q_reports:
+            props["liability:quality"] = {
+                "scope": "dataset",
+                "elements": [
+                    {"elementType": r.get("type", "other"), "detail": r}
+                    for r in iso_q_reports
+                ],
+            }
+
+        # W3C PROV-JSON document built from provenance metadata
+        item_id = prov.get(
+            "derived_uuid",
+            os.path.splitext(os.path.basename(prov.get("output_file", "item")))[0],
+        )
+        input_id = prov.get("input_file", "input_source")
+        props["liability:prov"] = {
+            "prefix": {
+                "xsd": "http://www.w3.org/2001/XMLSchema#",
+                "prov": "http://www.w3.org/ns/prov#",
+            },
+            "entity": {
+                item_id: {
+                    "prov:type": "prov:Entity",
+                    "prov:label": prov.get("output_file", item_id),
+                },
+                input_id: {
+                    "prov:type": "prov:Entity",
+                    "prov:label": input_id,
+                },
+            },
+            "activity": {
+                "heif_processing": {
+                    "prov:type": prov.get("algorithm_name", "ImageProcessing"),
+                    "prov:startTime": prov.get("processing_timestamp"),
+                    "prov:label": prov.get("algorithm_name", "HEIF TTL Importer"),
+                }
+            },
+            "agent": {
+                "heif_ttl_importer": {
+                    "prov:type": "prov:SoftwareAgent",
+                    "prov:label": "HEIF TTL Importer (QGIS Plugin)",
+                }
+            },
+            "wasDerivedFrom": {
+                "_:d1": {
+                    "prov:generatedEntity": item_id,
+                    "prov:usedEntity": input_id,
+                }
+            },
+            "wasGeneratedBy": {
+                "_:g1": {
+                    "prov:entity": item_id,
+                    "prov:activity": "heif_processing",
+                }
+            },
+            "wasAssociatedWith": {
+                "_:a1": {
+                    "prov:activity": "heif_processing",
+                    "prov:agent": "heif_ttl_importer",
+                }
+            },
+        }
+
+        # OGC Moving Features drone: attributes (populated when image is drone-sourced)
+        drone_props = self._drone_stac_props(prov)
+        if drone_props:
+            props.update(drone_props)
 
         return props
+
+    @staticmethod
+    def _drone_stac_props(prov: dict) -> dict:
+        """Extract ``drone:*`` STAC properties from ``prov["drone_moving_feature"]``.
+
+        All fields from the ``DroneMFAttributes`` schema are mapped with the
+        ``drone:`` prefix.  Fields that are ``None`` / ``""`` are omitted so the
+        STAC Item stays clean when most drone telemetry is unavailable.
+        """
+        dmf = prov.get("drone_moving_feature")
+        if not dmf or not isinstance(dmf, dict):
+            return {}
+        # Fields emitted without prefix (they are standard STAC / already namespaced)
+        NO_PREFIX = {"latitude", "longitude", "altitude_m", "time_utc"}
+        out: dict = {}
+        for k, v in dmf.items():
+            if v is None or v == "" or v == {}:
+                continue
+            if k in NO_PREFIX:
+                out[k] = v
+            else:
+                out[f"drone:{k}"] = v
+        return out
 
     def _build_assets(
         self,

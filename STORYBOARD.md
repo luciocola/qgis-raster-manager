@@ -1,4 +1,4 @@
-# QGIS Raster Manager — Storyboard
+# GIMI Imagery Workbench — Storyboard
 
 **Plugin version:** 2.0.0  
 **Author:** 4113 Engineering  
@@ -9,7 +9,7 @@
 
 ## Overview
 
-This storyboard describes the end-to-end user experience of the **QGIS Raster Manager** plugin.  
+This storyboard describes the end-to-end user experience of the **GIMI Imagery Workbench** plugin.  
 Each scene corresponds to one screen state or interaction moment in the plugin dialog.
 
 ---
@@ -18,14 +18,14 @@ Each scene corresponds to one screen state or interaction moment in the plugin d
 
 | | |
 |---|---|
-| **Trigger** | User clicks the *QGIS Raster Manager* toolbar button or selects **Raster → QGIS Raster Manager** from the menu |
+| **Trigger** | User clicks the *GIMI Imagery Workbench* toolbar button or selects **Raster → GIMI Imagery Workbench** from the menu |
 | **Screen state** | Main plugin dialog opens. All tabs visible: **Import**, **Export**, **STAC / Provenance**, **IDO Annotation**, **Query STAC** |
 | **User goal** | Load a raster (any GDAL-readable format) and optionally georeference it |
 | **Key UI elements** | File picker (Input Raster), Output format dropdown, Export path, tabs for metadata and annotation |
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  QGIS Raster Manager  v2.0.0              [?] [×]             │
+│  GIMI Imagery Workbench  v2.1.0            [?] [×]             │
 ├────────────────────────────────────────────────────────────────┤
 │  ┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌──────────────┐ │
 │  │  Import  │ │  Export  │ │ STAC/Prov.   │ │ IDO Annot.   │ │
