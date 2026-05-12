@@ -3,13 +3,13 @@
  <class>HEIFTTLImporterDialog</class>
  <widget class="QDialog" name="HEIFTTLImporterDialog">
   <property name="geometry">
-   <rect><x>0</x><y>0</y><width>740</width><height>680</height></rect>
+   <rect><x>0</x><y>0</y><width>1060</width><height>680</height></rect>
   </property>
   <property name="minimumSize">
-   <size><width>580</width><height>500</height></size>
+   <size><width>980</width><height>500</height></size>
   </property>
   <property name="sizeGripEnabled"><bool>true</bool></property>
-  <property name="windowTitle"><string>General Raster Importer</string></property>
+  <property name="windowTitle"><string>GIMI Imagery Workbench</string></property>
   <layout class="QVBoxLayout" name="verticalLayoutMain">
    <item>
     <widget class="QTabWidget" name="tabWidget">
@@ -161,6 +161,7 @@
               <property name="toolTip"><string>Select the GDAL output format for the converted raster</string></property>
               <item><property name="text"><string>GeoTIFF (.tif)</string></property></item>
               <item><property name="text"><string>Cloud-Optimised GeoTIFF (.tif)</string></property></item>
+              <item><property name="text"><string>JPEG2000 – Grok JP2GROK (.jp2) ★</string></property></item>
               <item><property name="text"><string>JPEG2000 – OpenJPEG (.jp2)</string></property></item>
               <item><property name="text"><string>PNG (.png)</string></property></item>
               <item><property name="text"><string>JPEG (.jpg)</string></property></item>
@@ -187,24 +188,6 @@
           </item>
          </layout>
         </widget>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="horizontalLayoutImportButton">
-         <item>
-          <spacer name="horizontalSpacerImport">
-           <property name="orientation"><enum>Qt::Horizontal</enum></property>
-           <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
-          </spacer>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btnImport">
-           <property name="text"><string>Start Import</string></property>
-           <property name="minimumWidth"><number>120</number></property>
-           <property name="toolTip"><string>Start the import process</string></property>
-           <property name="default"><bool>true</bool></property>
-          </widget>
-         </item>
-        </layout>
        </item>
        <item>
         <spacer name="verticalSpacerTab1">
@@ -298,39 +281,16 @@
          </layout>
         </widget>
        </item>
-       <item>
-        <widget class="QGroupBox" name="groupBoxPublishing">
-         <property name="title"><string>Publishing Actions</string></property>
-         <layout class="QHBoxLayout" name="horizontalLayoutPublishing">
-          <item>
-           <widget class="QPushButton" name="btnSTACExportAction">
-            <property name="text"><string>STAC Query</string></property>
-            <property name="toolTip"><string>Select a STAC service and query items by bounding box, date range and collection</string></property>
-            <property name="enabled"><bool>true</bool></property>
-            <property name="minimumHeight"><number>32</number></property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="btnImmutablePublish">
-            <property name="text"><string>Immutable Catalogue Publish</string></property>
-            <property name="toolTip"><string>Publish to an immutable STAC catalogue via the Satellite STAC Importer plugin. Opens the plugin if installed, or prompts to download it.</string></property>
-            <property name="enabled"><bool>true</bool></property>
-            <property name="minimumHeight"><number>32</number></property>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
       </layout>
      </widget>
 
-     <!-- TAB 3 : Export Options -->
+     <!-- TAB 3 : GIMI Codec -->
      <widget class="QWidget" name="tabExport">
-      <attribute name="title"><string>Export Options</string></attribute>
+      <attribute name="title"><string>GIMI Codec</string></attribute>
       <layout class="QVBoxLayout" name="verticalLayoutTab3">
        <item>
         <widget class="QGroupBox" name="groupBoxExport">
-         <property name="title"><string>Export GeoTIFF to TB21 GIMI HEIF</string></property>
+         <property name="title"><string>GeoTIFF to GIMI</string></property>
          <layout class="QVBoxLayout" name="verticalLayoutExport">
           <item>
            <layout class="QGridLayout" name="gridLayoutExport">
@@ -403,6 +363,7 @@
             <item>
              <widget class="QComboBox" name="comboCompression">
               <property name="toolTip"><string>HEIF compression codec</string></property>
+              <item><property name="text"><string>jp2 grok</string></property></item>
               <item><property name="text"><string>hevc</string></property></item>
               <item><property name="text"><string>av1</string></property></item>
               <item><property name="text"><string>jpeg2000</string></property></item>
@@ -441,7 +402,7 @@
        </item>
        <item>
         <widget class="QGroupBox" name="groupBoxGDALExport">
-         <property name="title"><string>Export to GDAL Format</string></property>
+         <property name="title"><string>GIMI to GDAL supported format</string></property>
          <layout class="QVBoxLayout" name="verticalLayoutGDALExport">
           <item>
            <layout class="QGridLayout" name="gridLayoutGDALExport">
@@ -510,7 +471,7 @@
             </item>
             <item row="3" column="0">
              <widget class="QLabel" name="labelGDALOutput">
-              <property name="text"><string>Output Path:</string></property>
+              <property name="text"><string>Output Directory:</string></property>
              </widget>
             </item>
             <item row="3" column="1" colspan="2">
@@ -562,21 +523,45 @@
     </widget>
    </item>
    <item>
-    <widget class="QProgressBar" name="progressBar">
-     <property name="value"><number>0</number></property>
-     <property name="textVisible"><bool>true</bool></property>
+    <widget class="QGroupBox" name="groupBoxPublishing">
+     <property name="title"><string>Publishing Actions</string></property>
+     <layout class="QHBoxLayout" name="horizontalLayoutPublishing">
+      <item>
+       <widget class="QPushButton" name="btnStartImport">
+        <property name="text"><string>▶  Start Import</string></property>
+        <property name="toolTip"><string>Convert and import the selected raster into QGIS, applying the options set in the Import tab</string></property>
+        <property name="enabled"><bool>true</bool></property>
+        <property name="minimumHeight"><number>36</number></property>
+        <property name="styleSheet"><string>QPushButton { background-color: #2E7D32; color: white; font-weight: bold; font-size: 13px; padding: 4px 16px; } QPushButton:disabled { background-color: #cccccc; color: #888888; }</string></property>
+       </widget>
+      </item>
+      <item>
+       <spacer>
+        <property name="orientation"><enum>Qt::Horizontal</enum></property>
+        <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnSTACExportAction">
+        <property name="text"><string>IPFS Upload</string></property>
+        <property name="toolTip"><string>Select a STAC service and query items by bounding box, date range and collection</string></property>
+        <property name="enabled"><bool>true</bool></property>
+        <property name="minimumHeight"><number>32</number></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnImmutablePublish">
+        <property name="text"><string>Immutable Catalogue Publish</string></property>
+        <property name="toolTip"><string>Publish to an immutable STAC catalogue via the Satellite STAC Importer plugin. Opens the plugin if installed, or prompts to download it.</string></property>
+        <property name="enabled"><bool>true</bool></property>
+        <property name="minimumHeight"><number>32</number></property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayoutButtons">
-     <item>
-      <widget class="QPushButton" name="btnCreatePackage">
-       <property name="text"><string>&#x1F4E6; Create Package (ZIP)</string></property>
-       <property name="minimumWidth"><number>160</number></property>
-       <property name="toolTip"><string>Create a ZIP archive with exported GeoTIFF, JSON provenance, and RDF/TTL metadata</string></property>
-       <property name="enabled"><bool>false</bool></property>
-      </widget>
-     </item>
      <item>
       <spacer name="horizontalSpacer">
        <property name="orientation"><enum>Qt::Horizontal</enum></property>
