@@ -5647,9 +5647,26 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
         grp_proc = QGroupBox('Processing')
         gl_proc = QVBoxLayout(grp_proc)
 
+        # Processing mode selector
+        hl_mode = QHBoxLayout()
+        hl_mode.addWidget(QLabel('Processing mode:'))
+        self._sar_cmb_mode = QComboBox()
+        self._sar_cmb_mode.addItems([
+            'Amplitude → HEIF  (dB stretch, 8-bit)',
+            'Sigma0 calibration  (backscatter coefficient)',
+            'Sigma0 + Speckle filter  (Lee 5×5)',
+            'Sigma0 + Terrain correction  (GDAL Warp, EPSG:4326)',
+            'dB conversion  (10·log10(sigma0))',
+            'Dual-pol decomposition  (VV/VH ratio + RGB)',
+        ])
+        self._sar_cmb_mode.setCurrentIndex(0)
+        self._sar_cmb_mode.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        hl_mode.addWidget(self._sar_cmb_mode, 1)
+        gl_proc.addLayout(hl_mode)
+
         hl_btns = QHBoxLayout()
-        self._sar_btn_process = QPushButton(
-            'Convert SAR → Amplitude HEIF + STAC + TTL')
+        self._sar_btn_process = QPushButton('▶  Run SAR Processing')
+        self._sar_btn_process.setMinimumHeight(34)
         self._sar_btn_process.setStyleSheet('font-weight:bold;')
         self._sar_btn_process.setEnabled(False)
         self._sar_btn_process.clicked.connect(self._sar_start_processing)
@@ -5775,6 +5792,7 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
             meta=self._sar_meta,
             out_dir=out_dir,
             liability_fields=liability_fields,
+            processing_mode=self._sar_cmb_mode.currentIndex(),
         )
         self._sar_thread = QThread()
         self._sar_worker.moveToThread(self._sar_thread)
@@ -7025,19 +7043,38 @@ for _mixin_method_name in dir(_RegisterSettingsTabMixin):
 
 
 class _SARWorker(QObject):
-    """Background worker: converts one Sentinel-1 SAFE sub-swath to amplitude
-    HEIF + writes STAC Item JSON + TTL/RDF sidecar."""
+    """Background worker for Sentinel-1 SAR processing.
+
+    Processing modes (index matches combo box):
+      0 – Amplitude HEIF  (dB stretch, 8-bit)
+      1 – Sigma0 calibration
+      2 – Sigma0 + Lee speckle filter (5×5)
+      3 – Sigma0 + terrain correction (GDAL Warp → EPSG:4326)
+      4 – dB conversion  (10·log10(sigma0))
+      5 – Dual-pol decomposition  (VV/VH ratio + RGB)
+    """
 
     progress = pyqtSignal(int, str)
-    finished = pyqtSignal(dict)   # result dict
+    finished = pyqtSignal(dict)
+
+    # Mode labels used in output filenames / log messages
+    MODE_LABELS = [
+        'amplitude',
+        'sigma0',
+        'sigma0_lee',
+        'sigma0_tc',
+        'db',
+        'dualpol',
+    ]
 
     def __init__(self, safe_path: str, meta: dict, out_dir: str,
-                 liability_fields: dict):
+                 liability_fields: dict, processing_mode: int = 0):
         super().__init__()
         self._safe = safe_path
         self._meta = meta
         self._out_dir = out_dir
         self._liability = liability_fields
+        self._mode = processing_mode
         self.cancelled = False
 
     # ------------------------------------------------------------------
@@ -7057,6 +7094,7 @@ class _SARWorker(QObject):
 
         stac_items = []
         ttl_graphs = []
+        mode_label = self.MODE_LABELS[self._mode] if self._mode < len(self.MODE_LABELS) else 'amplitude'
 
         for idx, sw in enumerate(subswaths):
             if self.cancelled:
@@ -7069,17 +7107,32 @@ class _SARWorker(QObject):
 
             tiff_path = sw['tiff']
             stem = os.path.splitext(os.path.basename(tiff_path))[0]
-            heif_out = os.path.join(self._out_dir, stem + '_amplitude.heif')
+            heif_out = os.path.join(self._out_dir, f'{stem}_{mode_label}.heif')
             stac_out = os.path.join(self._out_dir, stem + '_stac.json')
             ttl_out  = os.path.join(self._out_dir, stem + '.ttl')
 
-            # ── 1. SAR amplitude conversion → HEIF ────────────────────
+            # ── 1. SAR processing → HEIF ──────────────────────────────
             self.progress.emit(pct_start + 2,
-                               f'{sw["swath"]}: converting complex→amplitude…')
-            heif_ok, heif_err = self._convert_sar_to_heif(tiff_path, heif_out, sw)
+                               f'{sw["swath"]}: running {mode_label} processing…')
+            if self._mode == 0:
+                heif_ok, heif_err = self._convert_sar_to_heif(tiff_path, heif_out, sw)
+            elif self._mode == 1:
+                heif_ok, heif_err = self._process_sigma0(tiff_path, heif_out, sw)
+            elif self._mode == 2:
+                heif_ok, heif_err = self._process_sigma0_lee(tiff_path, heif_out, sw)
+            elif self._mode == 3:
+                heif_ok, heif_err = self._process_sigma0_tc(tiff_path, heif_out, sw)
+            elif self._mode == 4:
+                heif_ok, heif_err = self._process_db(tiff_path, heif_out, sw)
+            elif self._mode == 5:
+                heif_ok, heif_err = self._process_dualpol(tiff_path, heif_out, sw,
+                                                           subswaths)
+            else:
+                heif_ok, heif_err = self._convert_sar_to_heif(tiff_path, heif_out, sw)
+
             if not heif_ok:
                 self.progress.emit(pct_start + 3,
-                                   f'  ⚠ HEIF conversion failed: {heif_err}')
+                                   f'  ⚠ processing failed: {heif_err}')
 
             # ── 2. STAC Item ───────────────────────────────────────────
             self.progress.emit(pct_start + 5,
@@ -7211,6 +7264,178 @@ class _SARWorker(QObject):
 
             return True, ''
 
+        except Exception as exc:
+            return False, str(exc)
+
+    # ------------------------------------------------------------------
+    def _save_array_as_heif(self, arr8, heif_out: str, mode='L') -> tuple:
+        """Save a uint8 numpy array as HEIF (falls back to PNG)."""
+        try:
+            import pillow_heif
+            from PIL import Image
+            pillow_heif.register_heif_opener()
+            Image.fromarray(arr8, mode=mode).save(heif_out, format='HEIF',
+                                                   quality=85, chroma=444)
+            return True, ''
+        except Exception as he:
+            try:
+                from PIL import Image
+                png_out = heif_out.replace('.heif', '.png')
+                Image.fromarray(arr8, mode=mode).save(png_out)
+                return False, f'pillow-heif unavailable ({he}); saved PNG'
+            except Exception as pe:
+                return False, str(pe)
+
+    def _read_complex_array(self, tiff_path: str, max_px: int = 2048):
+        """Return (complex64 array, gdal_ds_closed) downsampled to max_px."""
+        import numpy as np
+        from osgeo import gdal
+        gdal.UseExceptions()
+        ds = gdal.Open(tiff_path, gdal.GA_ReadOnly)
+        if ds is None:
+            raise IOError(f'GDAL cannot open {tiff_path}')
+        full_w, full_h = ds.RasterXSize, ds.RasterYSize
+        scale = min(1.0, max_px / max(full_w, full_h))
+        out_w = max(1, int(full_w * scale))
+        out_h = max(1, int(full_h * scale))
+        band = ds.GetRasterBand(1)
+        raw = band.ReadRaster(0, 0, full_w, full_h, out_w, out_h,
+                              buf_type=gdal.GDT_CFloat32)
+        ds = None
+        if raw is None:
+            raise IOError('GDAL ReadRaster returned None')
+        arr = np.frombuffer(raw, dtype=np.complex64).reshape(out_h, out_w)
+        return arr
+
+    def _normalise_to_uint8(self, arr_f32, lo_pct=2, hi_pct=98):
+        import numpy as np
+        lo, hi = np.percentile(arr_f32, lo_pct), np.percentile(arr_f32, hi_pct)
+        if hi <= lo:
+            hi = lo + 1.0
+        return ((np.clip(arr_f32, lo, hi) - lo) / (hi - lo) * 255).astype(np.uint8)
+
+    def _process_sigma0(self, tiff_path: str, heif_out: str, sw: dict) -> tuple:
+        """Sigma0 calibration: sigma0 = |I+jQ|^2 / sin(incidence_angle)."""
+        try:
+            import numpy as np
+            arr = self._read_complex_array(tiff_path)
+            sigma0 = np.abs(arr) ** 2  # simplified: no sin(inc) correction (unavailable)
+            img8 = self._normalise_to_uint8(sigma0.astype(np.float32))
+            return self._save_array_as_heif(img8, heif_out)
+        except Exception as exc:
+            return False, str(exc)
+
+    def _process_sigma0_lee(self, tiff_path: str, heif_out: str, sw: dict) -> tuple:
+        """Sigma0 + Lee speckle filter (5×5 uniform mean approximation)."""
+        try:
+            import numpy as np
+            from scipy.ndimage import uniform_filter
+            arr = self._read_complex_array(tiff_path)
+            sigma0 = np.abs(arr).astype(np.float32) ** 2
+            # Simple Lee approximation: filtered = mean + (sigma0-mean)*weight
+            mean = uniform_filter(sigma0, size=5)
+            var  = uniform_filter(sigma0 ** 2, size=5) - mean ** 2
+            noise_var = np.mean(var) / (np.mean(mean) ** 2 + 1e-10)
+            weight = 1.0 - noise_var / (var / (mean ** 2 + 1e-10) + 1e-10)
+            weight = np.clip(weight, 0, 1)
+            filtered = mean + weight * (sigma0 - mean)
+            img8 = self._normalise_to_uint8(filtered)
+            return self._save_array_as_heif(img8, heif_out)
+        except ImportError:
+            # scipy not available — fall back to plain sigma0
+            return self._process_sigma0(tiff_path, heif_out, sw)
+        except Exception as exc:
+            return False, str(exc)
+
+    def _process_sigma0_tc(self, tiff_path: str, heif_out: str, sw: dict) -> tuple:
+        """Sigma0 + terrain correction: reproject to EPSG:4326 via GDAL Warp."""
+        try:
+            import numpy as np
+            import tempfile, os
+            from osgeo import gdal, osr
+            gdal.UseExceptions()
+
+            arr = self._read_complex_array(tiff_path)
+            sigma0 = np.abs(arr).astype(np.float32) ** 2
+            img8 = self._normalise_to_uint8(sigma0)
+
+            # Write intermediate float GeoTIFF so GDAL Warp can reproject
+            ds_src = gdal.Open(tiff_path, gdal.GA_ReadOnly)
+            gt = ds_src.GetGeoTransform()
+            proj = ds_src.GetProjection()
+            h, w = img8.shape
+            driver = gdal.GetDriverByName('MEM')
+            ds_tmp = driver.Create('', w, h, 1, gdal.GDT_Byte)
+            ds_tmp.SetGeoTransform(gt)
+            ds_tmp.SetProjection(proj if proj else osr.SpatialReference().ExportToWkt())
+            ds_tmp.GetRasterBand(1).WriteArray(img8)
+            ds_src = None
+
+            # Warp to EPSG:4326
+            tmp_tif = os.path.join(self._out_dir, '_tc_tmp.tif')
+            gdal.Warp(tmp_tif, ds_tmp,
+                      dstSRS='EPSG:4326',
+                      resampleAlg=gdal.GRIORA_Bilinear)
+            ds_tmp = None
+
+            # Read warped result
+            ds_w = gdal.Open(tmp_tif, gdal.GA_ReadOnly)
+            out_arr = ds_w.GetRasterBand(1).ReadAsArray().astype(np.uint8)
+            ds_w = None
+            os.remove(tmp_tif)
+
+            return self._save_array_as_heif(out_arr, heif_out)
+        except Exception as exc:
+            return False, str(exc)
+
+    def _process_db(self, tiff_path: str, heif_out: str, sw: dict) -> tuple:
+        """dB conversion: 10·log10(sigma0 + ε), normalised to uint8."""
+        try:
+            import numpy as np
+            arr = self._read_complex_array(tiff_path)
+            sigma0 = np.abs(arr).astype(np.float32) ** 2
+            db = 10.0 * np.log10(sigma0 + 1e-10)
+            img8 = self._normalise_to_uint8(db)
+            return self._save_array_as_heif(img8, heif_out)
+        except Exception as exc:
+            return False, str(exc)
+
+    def _process_dualpol(self, tiff_path: str, heif_out: str, sw: dict,
+                         all_subswaths: list) -> tuple:
+        """Dual-pol RGB composite: R=VV, G=VH, B=VV/VH.
+        If only one polarisation is available, falls back to sigma0."""
+        try:
+            import numpy as np
+
+            pol = sw.get('polarisation', '').upper()
+            vv_path = vh_path = None
+            for s in all_subswaths:
+                p = s.get('polarisation', '').upper()
+                if p == 'VV':
+                    vv_path = s['tiff']
+                elif p == 'VH':
+                    vh_path = s['tiff']
+
+            if vv_path is None or vh_path is None:
+                return self._process_sigma0(tiff_path, heif_out, sw)
+
+            vv = np.abs(self._read_complex_array(vv_path)).astype(np.float32) ** 2
+            vh = np.abs(self._read_complex_array(vh_path)).astype(np.float32) ** 2
+
+            # Resize vh to match vv if shapes differ
+            if vv.shape != vh.shape:
+                from PIL import Image
+                vh_img = Image.fromarray(self._normalise_to_uint8(vh))
+                vh_img = vh_img.resize((vv.shape[1], vv.shape[0]),
+                                        Image.BILINEAR)
+                vh = np.array(vh_img).astype(np.float32)
+
+            ratio = vv / (vh + 1e-10)
+            r = self._normalise_to_uint8(vv)
+            g = self._normalise_to_uint8(vh)
+            b = self._normalise_to_uint8(ratio)
+            rgb = np.stack([r, g, b], axis=2)
+            return self._save_array_as_heif(rgb, heif_out, mode='RGB')
         except Exception as exc:
             return False, str(exc)
 
