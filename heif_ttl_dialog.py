@@ -2361,9 +2361,29 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
     # IPFS Upload
     # ------------------------------------------------------------------
 
+    def _get_active_output_dir(self):
+        """Return the output directory of the currently visible tab, or ''."""
+        try:
+            idx = self.tabWidget.currentIndex()
+            label = self.tabWidget.tabText(idx)
+            if label == 'Import':
+                return self.txtOutputPath.text().strip()
+            if label == 'GIMI Codec':
+                p = self.txtGDALOutputPath.text().strip() if hasattr(self, 'txtGDALOutputPath') else ''
+                return os.path.dirname(p) if p else ''
+            if label == 'DJI Drone':
+                return self._dji_le_outdir.text().strip() if hasattr(self, '_dji_le_outdir') else ''
+            if label == 'HSI Hyperspectral':
+                return self._hsi_le_outdir.text().strip() if hasattr(self, '_hsi_le_outdir') else ''
+            if label == 'Sentinel-1 SAR':
+                return self._sar_le_outdir.text().strip() if hasattr(self, '_sar_le_outdir') else ''
+        except Exception:
+            pass
+        return ''
+
     def open_ipfs_upload_dialog(self):
         """Open the IPFS Upload dialog."""
-        dlg = _IPFSUploadDialog(self)
+        dlg = _IPFSUploadDialog(self, initial_path=self._get_active_output_dir())
         dlg.exec_()
 
     # STAC Query
@@ -6008,7 +6028,7 @@ class _IPFSUploadDialog(QDialog):
     """Standalone dialog replicating the 'Upload to IPFS' tab from the
     Asbestos HSI Manager.  Accepts any local file for upload."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, initial_path=''):
         super().__init__(parent)
         self.setWindowTitle('Upload to IPFS')
         self.setMinimumWidth(640)
@@ -6016,6 +6036,7 @@ class _IPFSUploadDialog(QDialog):
         self._file_to_upload = None   # path selected by user
         self._last_ipfs_url = None
         self._last_cid = None
+        self._initial_path = initial_path or ''
         self._init_ui()
 
     # ------------------------------------------------------------------
@@ -6037,8 +6058,10 @@ class _IPFSUploadDialog(QDialog):
         grp_file = QGroupBox('File to Upload')
         hl_file = QHBoxLayout(grp_file)
         self._le_file = QLineEdit()
-        self._le_file.setPlaceholderText('Select a file to upload to IPFS…')
-        self._le_file.setReadOnly(True)
+        self._le_file.setPlaceholderText('Select a file or directory to upload to IPFS…')
+        self._le_file.setReadOnly(False)
+        if self._initial_path:
+            self._le_file.setText(self._initial_path)
         btn_browse = QPushButton('Browse…')
         btn_browse.setMaximumWidth(90)
         btn_browse.clicked.connect(self._browse_file)
