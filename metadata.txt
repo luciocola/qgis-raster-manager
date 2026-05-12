@@ -9,8 +9,8 @@ license=AGPL-3.0-only
 
 about=GIMI Imagery Workbench accepts any raster format supported by GDAL ≥ 3.13. It uses TTL (Turtle RDF) or embedded RDF metadata to extract Ground Control Points for automatic georeferencing and exports the result in any GDAL-writable format (GeoTIFF, COG, JPEG2000 via Grok JP2GROK or OpenJPEG, PNG, JPEG, HFA, ECW, NITF, GeoPackage Raster, TB21 GIMI HEIF …). JPEG-2000 output uses the Grok JP2GROK driver (GDAL 3.13+, https://github.com/GrokImageCompression/grok) for HTJ2K, TLM/PLT random-access markers and 3-5x faster throughput than OpenJPEG. Falls back to JP2OpenJPEG when Grok is not installed.
 
-tracker=https://github.com/yourrepo/issues
-repository=https://github.com/yourrepo
+tracker=https://github.com/luciocola/GIMI-imagery-workbench/issues
+repository=https://github.com/luciocola/GIMI-imagery-workbench
 
 tags=imagery,raster,gdal,heif,geotiff,jpeg2000,jp2grok,grok,rdf,ttl,georeferencing,gcp,metadata,export,htj2k
 
