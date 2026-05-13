@@ -79,7 +79,7 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 ### Plugin Installation
 
 #### Method 1: Manual Installation
-1. Copy the `heif_ttl_importer` folder to your QGIS plugins directory:
+1. Copy the `QGIS imagery workbench` folder to your QGIS plugins directory:
    - **macOS**: `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/`
    - **Linux**: `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/`
    - **Windows**: `%APPDATA%/QGIS/QGIS3/profiles/default/python/plugins/`
@@ -93,7 +93,7 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 
 #### Method 2: Using pb_tool (for development)
 ```bash
-cd heif_ttl_importer
+cd QGIS imagery workbench
 pb_tool deploy
 ```
 
@@ -115,7 +115,7 @@ You can analyze the complete structure of a HEIF/HEVC file in two ways:
 Use the included `show_heif_structure.py` utility:
 
 ```bash
-cd heif_ttl_importer
+cd QGIS imagery workbench
 python show_heif_structure.py path/to/image.heic
 ```
 
@@ -650,7 +650,7 @@ After a successful build, `libheif_core.py` and `_libheif_core*.so` appear in `l
 ### File Structure
 
 ```
-heif_ttl_importer/
+QGIS imagery workbench/
 ├── __init__.py                    # Plugin entry point
 ├── metadata.txt                   # Plugin metadata
 ├── heif_ttl_importer.py          # Main plugin class
