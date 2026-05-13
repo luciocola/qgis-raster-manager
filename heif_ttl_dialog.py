@@ -6273,18 +6273,43 @@ class _IPFSUploadDialog(QDialog):
                                 'These files no longer exist:\n' + '\n'.join(missing))
             return
 
-        # Load IPFSUploader
+        # Load IPFSUploader — register modules under a fake package so that
+        # relative imports inside ipfs_uploader.py resolve correctly.
         _asbestos_dir = '/Users/luciocolaiacomo/4113Eng-wfs/cop_defence_stac/asbestos_hsi_manager'
+        _pkg_name = '_asbestos_hsi_manager_gimi'
         try:
-            _oidc_spec = _ilu.spec_from_file_location(
-                '_oidc_auth_gimi', f'{_asbestos_dir}/oidc_auth.py')
-            _oidc_mod = _ilu.module_from_spec(_oidc_spec)
-            _oidc_spec.loader.exec_module(_oidc_mod)
-            _up_spec = _ilu.spec_from_file_location(
-                '_ipfs_uploader_gimi', f'{_asbestos_dir}/ipfs_uploader.py')
-            _up_mod = _ilu.module_from_spec(_up_spec)
-            _up_mod.OIDCAuthenticator = _oidc_mod.OIDCAuthenticator
-            _up_spec.loader.exec_module(_up_mod)
+            import sys, types
+            # Create / reuse a lightweight package stub
+            if _pkg_name not in sys.modules:
+                _pkg = types.ModuleType(_pkg_name)
+                _pkg.__path__ = [_asbestos_dir]
+                _pkg.__package__ = _pkg_name
+                sys.modules[_pkg_name] = _pkg
+
+            # Load oidc_auth as <pkg>.oidc_auth
+            _oidc_key = f'{_pkg_name}.oidc_auth'
+            if _oidc_key not in sys.modules:
+                _oidc_spec = _ilu.spec_from_file_location(
+                    _oidc_key, f'{_asbestos_dir}/oidc_auth.py',
+                    submodule_search_locations=[])
+                _oidc_mod = _ilu.module_from_spec(_oidc_spec)
+                _oidc_mod.__package__ = _pkg_name
+                sys.modules[_oidc_key] = _oidc_mod
+                _oidc_spec.loader.exec_module(_oidc_mod)
+
+            # Load ipfs_uploader as <pkg>.ipfs_uploader
+            _up_key = f'{_pkg_name}.ipfs_uploader'
+            if _up_key not in sys.modules:
+                _up_spec = _ilu.spec_from_file_location(
+                    _up_key, f'{_asbestos_dir}/ipfs_uploader.py',
+                    submodule_search_locations=[])
+                _up_mod = _ilu.module_from_spec(_up_spec)
+                _up_mod.__package__ = _pkg_name
+                sys.modules[_up_key] = _up_mod
+                _up_spec.loader.exec_module(_up_mod)
+            else:
+                _up_mod = sys.modules[_up_key]
+
             IPFSUploader = _up_mod.IPFSUploader
         except Exception as exc:
             QMessageBox.critical(self, 'Module Error',
