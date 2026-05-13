@@ -6174,6 +6174,18 @@ class _IPFSUploadDialog(QDialog):
         self._btn_copy_json.setEnabled(False)
         self._btn_copy_json.clicked.connect(self._copy_manifest)
         hl_btns.addWidget(self._btn_copy_json)
+
+        self._btn_blockchain = QPushButton('⛓  Register on Blockchain →')
+        self._btn_blockchain.setMinimumHeight(36)
+        self._btn_blockchain.setEnabled(False)
+        self._btn_blockchain.setToolTip(
+            'Pre-fills and opens the blockchain registration dialog using the '
+            'IPFS CID and manifest hash from the upload above.')
+        self._btn_blockchain.setStyleSheet(
+            'QPushButton { background-color: #3F51B5; color: white; font-weight: bold; }'
+            'QPushButton:disabled { background-color: #cccccc; color: #888888; }')
+        self._btn_blockchain.clicked.connect(self._open_blockchain_dialog)
+        hl_btns.addWidget(self._btn_blockchain)
         hl_btns.addStretch()
 
         btn_close = QPushButton('Close')
@@ -6253,6 +6265,24 @@ class _IPFSUploadDialog(QDialog):
             from PyQt5.QtWidgets import QApplication
             QApplication.clipboard().setText(
                 json.dumps(self._last_manifest, indent=2))
+
+    def _open_blockchain_dialog(self):
+        """Open the blockchain registration dialog pre-filled with the
+        results of the IPFS upload that was just completed."""
+        if not self._last_manifest:
+            return
+        archive = self._last_manifest.get('archive', {})
+        # Prefer BLAKE3 over SHA-256 if present
+        zip_hash = archive.get('blake3') or archive.get('sha256', '')
+        zip_algo = 'blake3' if archive.get('blake3') else 'sha256'
+        initial = {
+            'ipfs_url': self._last_ipfs_url or '',
+            'cid':      self._last_cid or '',
+            'zip_hash': zip_hash,
+            'zip_hash_algo': zip_algo,
+        }
+        dlg = _BlockchainRegisterDialog(self, initial_data=initial)
+        dlg.exec_()
 
     def _do_upload(self):
         import os, json, zipfile, tempfile, importlib.util as _ilu
@@ -6537,6 +6567,7 @@ class _IPFSUploadDialog(QDialog):
             self._le_cid.setText(cid)
             self._le_zip_hash.setText(f'{zip_algo.upper()}: {zip_digest}')
             self._btn_copy_json.setEnabled(True)
+            self._btn_blockchain.setEnabled(True)
 
             self._status(f'\n✓ Upload successful!')
             self._status(f'   CID:      {cid}')
@@ -6586,15 +6617,26 @@ class _BlockchainRegisterDialog(QDialog):
     """
 
     _DEFAULT_GATEWAY  = 'https://api.demo.secd.eu'
-    _DEFAULT_CHANNEL  = 'demo'
-    _DEFAULT_CHAINCODE = 'archaeology'
+    _DEFAULT_CHANNEL  = 'test_dq4gimi'
+    _DEFAULT_CHAINCODE = ''
     _ASBESTOS_DIR     = '/Users/luciocolaiacomo/4113Eng-wfs/cop_defence_stac/asbestos_hsi_manager'
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, initial_data=None):
+        """Create the dialog, optionally pre-filling fields from a previous
+        IPFS upload.
+
+        Parameters
+        ----------
+        initial_data : dict, optional
+            Dictionary produced by ``_IPFSUploadDialog`` after a successful
+            upload.  Expected keys (all optional):
+            ``ipfs_url``, ``cid``, ``zip_hash``, ``zip_hash_algo``.
+        """
         super().__init__(parent)
         self.setWindowTitle('Register on Blockchain')
         self.setMinimumWidth(660)
         self.setMinimumHeight(600)
+        self._initial_data = initial_data or {}
         self._init_ui()
 
     # ------------------------------------------------------------------
@@ -6623,11 +6665,17 @@ class _BlockchainRegisterDialog(QDialog):
         gl_asset.addWidget(QLabel('IPFS URL:'), 1, 0)
         self._le_ipfs_url = QLineEdit()
         self._le_ipfs_url.setPlaceholderText('https://ipfs.demo.secd.eu/files/<CID>')
+        if self._initial_data.get('ipfs_url'):
+            self._le_ipfs_url.setText(self._initial_data['ipfs_url'])
         gl_asset.addWidget(self._le_ipfs_url, 1, 1)
 
-        gl_asset.addWidget(QLabel('File Hash (SHA-256):'), 2, 0)
+        gl_asset.addWidget(QLabel('File Hash (SHA-256/BLAKE3):'), 2, 0)
         self._le_hash = QLineEdit()
-        self._le_hash.setPlaceholderText('SHA-256 hex string of the uploaded file')
+        self._le_hash.setPlaceholderText('SHA-256 or BLAKE3 hex string of the uploaded file')
+        if self._initial_data.get('zip_hash'):
+            algo = self._initial_data.get('zip_hash_algo', '').upper()
+            self._le_hash.setText(
+                f'{algo}:{self._initial_data["zip_hash"]}' if algo else self._initial_data['zip_hash'])
         gl_asset.addWidget(self._le_hash, 2, 1)
 
         root.addWidget(grp_asset)
@@ -6740,7 +6788,7 @@ class _BlockchainRegisterDialog(QDialog):
         p12_pwd    = self._le_pwd.text()
         gateway    = self._le_gateway.text().strip() or self._DEFAULT_GATEWAY
         channel    = self._le_channel.text().strip()  or self._DEFAULT_CHANNEL
-        chaincode  = self._le_chaincode.text().strip() or self._DEFAULT_CHAINCODE
+        chaincode  = self._le_chaincode.text().strip()
 
         if not ipfs_url:
             QMessageBox.warning(self, 'Missing IPFS URL',

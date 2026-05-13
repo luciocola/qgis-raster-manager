@@ -20,6 +20,13 @@
       <attribute name="title"><string>Import</string></attribute>
       <layout class="QVBoxLayout" name="verticalLayoutTab1">
        <item>
+        <widget class="QLabel" name="lblImportSteps">
+         <property name="text"><string>&lt;b&gt;How to import&lt;/b&gt;: 1. Select your raster file (HEIF/HEIC, GeoTIFF, JP2 or any GDAL format). &amp;nbsp; 2. Optionally select a TTL/RDF metadata file for Ground Control Points. &amp;nbsp; 3. Set the output directory and choose a format. &amp;nbsp; 4. Enable &lt;i&gt;Warp image&lt;/i&gt; for proper georeferenced display. &amp;nbsp; 5. Click &lt;b&gt;▶ Start Import&lt;/b&gt;.</string></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet"><string>QLabel { background: #E8F5E9; border: 1px solid #A5D6A7; border-radius: 4px; padding: 6px 8px; color: #1B5E20; }</string></property>
+        </widget>
+       </item>
+       <item>
         <widget class="QGroupBox" name="groupBoxFiles">
          <property name="title"><string>Input Files</string></property>
          <layout class="QGridLayout" name="gridLayout">
@@ -212,6 +219,13 @@
       <attribute name="title"><string>Metadata &amp; Provenance</string></attribute>
       <layout class="QVBoxLayout" name="verticalLayoutTab2">
        <item>
+        <widget class="QLabel" name="lblMetadataSteps">
+         <property name="text"><string>&lt;b&gt;How to inspect metadata&lt;/b&gt;: The &lt;i&gt;Metadata Preview&lt;/i&gt; panel is populated automatically after an import. &amp;nbsp; To inspect a previous run: click &lt;b&gt;Load Provenance...&lt;/b&gt; and select the &lt;code&gt;_provenance.json&lt;/code&gt; file generated alongside your output. &amp;nbsp; Use &lt;b&gt;Export as STAC Item&lt;/b&gt; to package the provenance as a STAC 1.0 JSON. &amp;nbsp; Use &lt;b&gt;Query OSM Context&lt;/b&gt; to enrich the record with surrounding features.</string></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet"><string>QLabel { background: #E3F2FD; border: 1px solid #90CAF9; border-radius: 4px; padding: 6px 8px; color: #0D47A1; }</string></property>
+        </widget>
+       </item>
+       <item>
         <widget class="QGroupBox" name="groupBoxMetadata">
          <property name="title"><string>Metadata Preview</string></property>
          <layout class="QVBoxLayout" name="verticalLayout_3">
@@ -297,6 +311,13 @@
      <widget class="QWidget" name="tabExport">
       <attribute name="title"><string>GIMI Codec</string></attribute>
       <layout class="QVBoxLayout" name="verticalLayoutTab3">
+       <item>
+        <widget class="QLabel" name="lblExportSteps">
+         <property name="text"><string>&lt;b&gt;GeoTIFF → TB21 GIMI HEIF&lt;/b&gt;: Select a GeoTIFF source (loaded layer or file), choose an output path, set quality and codec, then click &lt;b&gt;Export to TB21 HEIF&lt;/b&gt;. Enable &lt;i&gt;Embed RDF Metadata&lt;/i&gt; to produce a fully TB21-compliant file (requires &lt;code&gt;heif-enc&lt;/code&gt;). &amp;nbsp;&amp;nbsp; &lt;b&gt;Any format → GDAL&lt;/b&gt;: Use the lower panel to re-export any loaded raster (including HEIF/GIMI) to GeoTIFF, COG, JPEG2000, NITF or other GDAL-supported formats with optional creation options.</string></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet"><string>QLabel { background: #FFF3E0; border: 1px solid #FFCC80; border-radius: 4px; padding: 6px 8px; color: #E65100; }</string></property>
+        </widget>
+       </item>
        <item>
         <widget class="QGroupBox" name="groupBoxExport">
          <property name="title"><string>GeoTIFF to GIMI</string></property>
@@ -537,16 +558,8 @@
      <layout class="QHBoxLayout" name="horizontalLayoutPublishing">
       <item>
        <widget class="QPushButton" name="btnSTACExportAction">
-        <property name="text"><string>IPFS Upload</string></property>
-        <property name="toolTip"><string>Select a STAC service and query items by bounding box, date range and collection</string></property>
-        <property name="enabled"><bool>true</bool></property>
-        <property name="minimumHeight"><number>32</number></property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="btnImmutablePublish">
-        <property name="text"><string>Immutable Catalogue Publish</string></property>
-        <property name="toolTip"><string>Publish to an immutable STAC catalogue via the Satellite STAC Importer plugin. Opens the plugin if installed, or prompts to download it.</string></property>
+        <property name="text"><string>⬆ Upload IPFS + Blockchain</string></property>
+        <property name="toolTip"><string>Upload files to IPFS and then register the asset on the blockchain in a single sequential workflow.</string></property>
         <property name="enabled"><bool>true</bool></property>
         <property name="minimumHeight"><number>32</number></property>
        </widget>
