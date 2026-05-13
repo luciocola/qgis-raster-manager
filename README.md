@@ -84,6 +84,9 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
    - **Linux**: `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/`
    - **Windows**: `%APPDATA%/QGIS/QGIS3/profiles/default/python/plugins/`
 
+> **⚠ WARNING: WINDOWS OS INSTALLATION NOT TESTED.**  
+> The plugin has been developed and tested on macOS and Linux only. Windows installation is provided on a best-effort basis via `install_windows.ps1` and the QGIS "Install from ZIP" method, but has not been validated. Functionality, dependency installation, and path handling on Windows may require additional steps.
+
 2. Restart QGIS
 
 3. Enable the plugin:
