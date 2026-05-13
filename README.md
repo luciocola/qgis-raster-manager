@@ -57,25 +57,45 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
    ```
 
 3. **Optional: libheif command-line tools** (for TB21 GIMI export with embedded RDF):
-   - Download from: https://github.com/strukturag/libheif
-   - Includes `heif-enc` for creating TB21 GIMI compliant HEIF files
-   - Build instructions:
-     ```bash
-     git clone https://github.com/strukturag/libheif.git
-     cd libheif
-     mkdir build && cd build
-     cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_EXPERIMENTAL_FEATURES=on
-     make
-     sudo make install
-     ```
+
+   **macOS / Linux — build from source:**
+   ```bash
+   git clone https://github.com/strukturag/libheif.git
+   cd libheif
+   mkdir build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_EXPERIMENTAL_FEATURES=on
+   make
+   sudo make install
+   ```
    > **Note:** `-DENABLE_EXPERIMENTAL_FEATURES=on` is required to enable `tili` tiling mode
    > and the `heif-enc` RDF sidecar feature. Without it these features are compiled out.
-   - Provides `heif-enc` and `heif-convert` tools for:
-     - Advanced tiling modes (grid, tili, unci)
-     - Uncompressed codec with signed integer support
-     - SAI metadata for GIMI content IDs and timestamps
-     - Multi-resolution pyramids
-     - Image sequences with metadata tracks
+
+   **macOS shortcut:**
+   ```bash
+   brew install libheif
+   ```
+
+   **Windows — pre-built installer (recommended):**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File install_windows.ps1 -InstallHeifEnc
+   ```
+   This downloads `heif-enc.exe` + required DLLs from the latest GitHub Actions release,
+   extracts them to `%LOCALAPPDATA%\GIMI_heif_enc\`, and writes `HEIF_ENC_PATH` into
+   `local_secrets.py` automatically.  The plugin detects it on next QGIS restart.
+
+   > **Windows manual alternative:** download `heif-enc-windows-x64.zip` from the
+   > [GitHub Releases page](https://github.com/luciocola/GIMI-imagery-workbench/releases),
+   > extract to any folder, and set `HEIF_ENC_PATH` in `local_secrets.py`:
+   > ```python
+   > HEIF_ENC_PATH = r'C:\tools\heif-enc\heif-enc.exe'
+   > ```
+
+   Provides `heif-enc` for:
+   - Advanced tiling modes (grid, tili, unci)
+   - Uncompressed codec with signed integer support
+   - SAI metadata for GIMI content IDs and timestamps
+   - Multi-resolution pyramids
+   - Image sequences with metadata tracks
 
 **Note**: BLAKE3 is used for cryptographic hashing to ensure data integrity and interoperability with other defense and emergency response systems. The plugin generates BLAKE3 hashes (with multihash format) for both input and output files, providing verifiable file fingerprints for secure data exchange and provenance tracking.
 
@@ -89,6 +109,10 @@ A QGIS 3.x plugin that imports HEIF (High Efficiency Image Format) imagery files
 
 > **⚠ WARNING: WINDOWS OS INSTALLATION NOT TESTED.**  
 > The plugin has been developed and tested on macOS and Linux only. Windows installation is provided on a best-effort basis via `install_windows.ps1` and the QGIS "Install from ZIP" method, but has not been validated. Functionality, dependency installation, and path handling on Windows may require additional steps.
+>
+> **TB21 GIMI HEIF export on Windows** requires `heif-enc.exe`. Use the `-InstallHeifEnc`
+> switch (see Prerequisites above) to download the pre-built binary automatically, or
+> install manually from the [GitHub Releases page](https://github.com/luciocola/GIMI-imagery-workbench/releases).
 
 2. Restart QGIS
 
@@ -425,22 +449,43 @@ The plugin supports the ISO 23001-17 uncompressed codec including the latest sig
 
 ### heif-enc Integration
 
-When `heif-enc` command-line tool is available, the plugin can leverage advanced encoding features:
+When `heif-enc` is available, the plugin enables full TB21 GIMI compliant HEIF export with embedded RDF metadata.
 
+**macOS / Linux:**
 ```bash
 # Check if heif-enc is available
 which heif-enc
 
-# Or use custom build location
+# Or point to a custom build
 export HEIF_ENC_PATH=~/Downloads/libheif/build/examples/heif-enc
 ```
 
+**Windows — one-line install:**
+```powershell
+powershell -ExecutionPolicy Bypass -File install_windows.ps1 -InstallHeifEnc
+```
+This downloads the pre-built `heif-enc.exe` (HEVC + AV1 + JP2) from the GitHub
+Actions release and configures the path automatically.
+
+**Manual path override** (all platforms) — add to `local_secrets.py`:
+```python
+# macOS / Linux
+HEIF_ENC_PATH = '/usr/local/bin/heif-enc'
+
+# Windows
+HEIF_ENC_PATH = r'C:\Users\you\AppData\Local\GIMI_heif_enc\heif-enc.exe'
+```
+
+The plugin probes `HEIF_ENC_PATH` from `local_secrets.py` first, then the
+`HEIF_ENC_PATH` environment variable, then well-known system paths.
+
 Features enabled with heif-enc:
+- TB21 GIMI compliant HEIF with embedded RDF (fully standard-compliant)
 - Multi-resolution pyramid encoding
 - Image sequence encoding with metadata tracks
 - Advanced compression options
-- Tiling mode selection
-- SAI metadata injection
+- Tiling mode selection (grid, tili, unci)
+- SAI metadata injection (GIMI content IDs, TAI timestamps)
 
 ### JPEG2000 Export
 
