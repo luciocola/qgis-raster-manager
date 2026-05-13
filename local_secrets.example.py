@@ -28,3 +28,10 @@ MQTT_PORT = 1883
 MQTT_TOPIC = ''                 # auto-filled from deployment if empty
 MQTT_USERNAME = ''              # leave empty if broker has no auth
 MQTT_PASSWORD = ''              # leave empty if broker has no auth
+
+# heif-enc path override (for TB21 GIMI HEIF export)
+# Leave empty to use system PATH / auto-detection.
+# On Windows, install_windows.ps1 -InstallHeifEnc sets this automatically.
+# Example (Windows):  r'C:\Users\you\AppData\Local\GIMI_heif_enc\heif-enc.exe'
+# Example (macOS/Linux): '/usr/local/bin/heif-enc'
+HEIF_ENC_PATH = ''

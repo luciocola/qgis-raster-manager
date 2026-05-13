@@ -1,0 +1,256 @@
+name: Build libheif (Windows x64)
+
+# Builds heif-enc.exe + required DLLs for Windows x64 and publishes them as
+# a GitHub release asset so that install_windows.ps1 can download them
+# automatically.
+#
+# Triggers:
+#   • Manual:  Actions → "Build libheif (Windows x64)" → Run workflow
+#   • Tags:    push of a tag matching  libheif-windows-*
+#
+# The produced artefact is:  heif-enc-windows-x64.zip
+# It contains:  heif-enc.exe  +  all required DLLs (libheif, libde265, x265, aom, openjpeg)
+
+on:
+  workflow_dispatch:
+    inputs:
+      libheif_version:
+        description: 'libheif git tag to build (e.g. v1.19.7)'
+        required: false
+        default: 'v1.19.7'
+      experimental:
+        description: 'Enable experimental features (tili tiling mode)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+  push:
+    tags:
+      - 'libheif-windows-*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    env:
+      LIBHEIF_VERSION: ${{ github.event.inputs.libheif_version || 'v1.19.7' }}
+      ENABLE_EXPERIMENTAL: ${{ github.event.inputs.experimental || 'true' }}
+
+    steps:
+      # ── 0. Checkout (needed for release action to find the repo) ──────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 1. Set up MSVC environment ─────────────────────────────────────────
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ── 2. Cache vcpkg binary cache ────────────────────────────────────────
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+            C:\Users\runneradmin\AppData\Local\vcpkg\archives
+          key: vcpkg-x64-windows-libheif-${{ env.LIBHEIF_VERSION }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            vcpkg-x64-windows-libheif-
+
+      # ── 3. Install vcpkg dependencies ─────────────────────────────────────
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT"
+          Write-Host "vcpkg root: $vcpkg"
+          & "$vcpkg\vcpkg.exe" install `
+            libde265:x64-windows `
+            x265:x64-windows `
+            libaom:x64-windows `
+            openjpeg:x64-windows `
+            --triplet x64-windows `
+            --clean-after-build
+          Write-Host "vcpkg dependencies installed"
+
+      # ── 4. Clone libheif ──────────────────────────────────────────────────
+      - name: Clone libheif ${{ env.LIBHEIF_VERSION }}
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:LIBHEIF_VERSION `
+            https://github.com/strukturag/libheif.git libheif_src
+          Write-Host "Cloned libheif $env:LIBHEIF_VERSION"
+
+      # ── 5. Configure with CMake ───────────────────────────────────────────
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT"
+          $toolchain = "$vcpkg\scripts\buildsystems\vcpkg.cmake"
+          $experimental = if ($env:ENABLE_EXPERIMENTAL -eq 'true') {'ON'} else {'OFF'}
+
+          cmake -B build -S libheif_src `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DENABLE_EXPERIMENTAL_FEATURES=$experimental `
+            -DWITH_LIBDE265=ON `
+            -DWITH_X265=ON `
+            -DWITH_AOM_ENCODER=ON `
+            -DWITH_OpenJPEG_ENCODER=ON `
+            -DWITH_OpenJPEG_DECODER=ON `
+            -DBUILD_SHARED_LIBS=ON `
+            -DWITH_EXAMPLES=ON `
+            -DWITH_REDUCED_VISIBILITY=OFF
+
+          Write-Host "CMake configuration complete"
+
+      # ── 6. Build heif-enc ─────────────────────────────────────────────────
+      - name: Build heif-enc
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target heif-enc --parallel
+          Write-Host "Build complete"
+
+      # ── 7. Collect heif-enc.exe + all required DLLs ───────────────────────
+      - name: Collect binaries
+        shell: pwsh
+        run: |
+          $dist = "dist\heif-enc-windows-x64"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+
+          # heif-enc.exe
+          $enc = Get-ChildItem -Path build -Filter heif-enc.exe -Recurse | Select-Object -First 1
+          if ($enc) {
+            Copy-Item $enc.FullName $dist
+            Write-Host "Copied: $($enc.FullName)"
+          } else {
+            Write-Error "heif-enc.exe not found after build!"
+            exit 1
+          }
+
+          # libheif.dll (built by us)
+          $heifDll = Get-ChildItem -Path build -Filter heif.dll -Recurse | Select-Object -First 1
+          if (-not $heifDll) {
+            $heifDll = Get-ChildItem -Path build -Filter libheif.dll -Recurse | Select-Object -First 1
+          }
+          if ($heifDll) { Copy-Item $heifDll.FullName $dist; Write-Host "Copied: $($heifDll.FullName)" }
+
+          # vcpkg DLLs
+          $vcpkg_bin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
+          $wanted = @(
+            'libde265.dll',
+            'x265.dll',
+            'aom.dll',
+            'openjp2.dll',
+            'zlib1.dll',
+            'libpng16.dll',
+            'jpeg62.dll',
+            'tiff.dll'
+          )
+          foreach ($dll in $wanted) {
+            $src = Join-Path $vcpkg_bin $dll
+            if (Test-Path $src) {
+              Copy-Item $src $dist
+              Write-Host "Copied DLL: $dll"
+            } else {
+              Write-Host "Optional DLL not found (skipped): $dll"
+            }
+          }
+
+          # MSVC runtime DLLs (vcredist) — copy from system if present
+          $sys32 = "$env:SystemRoot\System32"
+          foreach ($rt in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            $src = Join-Path $sys32 $rt
+            if (Test-Path $src) { Copy-Item $src $dist; Write-Host "Copied runtime: $rt" }
+          }
+
+          Write-Host ""
+          Write-Host "=== Contents of $dist ==="
+          Get-ChildItem $dist | Format-Table Name, Length
+
+      # ── 8. Write version metadata file ────────────────────────────────────
+      - name: Write version file
+        shell: pwsh
+        run: |
+          $dist = "dist\heif-enc-windows-x64"
+          $info = @{
+            libheif_version          = $env:LIBHEIF_VERSION
+            experimental_features    = ($env:ENABLE_EXPERIMENTAL -eq 'true')
+            built_by                 = 'github-actions'
+            build_date               = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+            platform                 = 'windows-x64'
+            gimi_plugin_compatibility = 'GIMI Imagery Workbench >= 1.0'
+          } | ConvertTo-Json -Depth 3
+          $info | Out-File -Encoding UTF8 "$dist\BUILD_INFO.json"
+          Write-Host $info
+
+      # ── 9. Create ZIP ─────────────────────────────────────────────────────
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          $zipName = "heif-enc-windows-x64.zip"
+          Compress-Archive -Path "dist\heif-enc-windows-x64\*" -DestinationPath $zipName -Force
+          $size = (Get-Item $zipName).Length
+          Write-Host "Created $zipName ($([math]::Round($size/1MB, 2)) MB)"
+
+      # ── 10. Upload as workflow artifact ───────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heif-enc-windows-x64
+          path: heif-enc-windows-x64.zip
+          retention-days: 90
+
+      # ── 11. Create GitHub release (tag pushes only) ───────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "heif-enc Windows x64 — libheif ${{ env.LIBHEIF_VERSION }}"
+          body: |
+            ## Pre-built heif-enc for Windows x64
+
+            Built from **libheif ${{ env.LIBHEIF_VERSION }}** with:
+            - `ENABLE_EXPERIMENTAL_FEATURES=${{ env.ENABLE_EXPERIMENTAL }}`  (`tili` tiling mode)
+            - HEVC encode/decode (libde265 + x265)
+            - AV1 encode/decode (libaom)
+            - JPEG 2000 encode/decode (OpenJPEG)
+
+            ### Usage with GIMI Imagery Workbench
+
+            **Option A — Automatic** (recommended):
+            ```powershell
+            powershell -ExecutionPolicy Bypass -File install_windows.ps1 -InstallHeifEnc
+            ```
+
+            **Option B — Manual**:
+            1. Download `heif-enc-windows-x64.zip` and extract to a folder, e.g.
+               `C:\tools\heif-enc\`
+            2. Add that folder to your **PATH**, or set `HEIF_ENC_PATH` in the
+               QGIS plugin's `local_secrets.py`:
+               ```python
+               HEIF_ENC_PATH = r'C:\tools\heif-enc\heif-enc.exe'
+               ```
+            3. Restart QGIS.
+
+            > **Note:** Visual C++ Redistributable 2015–2022 (x64) is required.
+            > Download from https://aka.ms/vs/17/release/vc_redist.x64.exe if missing.
+
+            ### What's included
+            | File | Purpose |
+            |------|---------|
+            | `heif-enc.exe` | Encoder CLI — used by GIMI for TB21 HEIF export |
+            | `heif.dll` | libheif shared library |
+            | `libde265.dll` | HEVC decoder |
+            | `x265.dll` | HEVC encoder |
+            | `aom.dll` | AV1 codec |
+            | `openjp2.dll` | JPEG 2000 codec |
+            | `BUILD_INFO.json` | Build metadata / version record |
+          files: heif-enc-windows-x64.zip
+          draft: false
+          prerelease: false

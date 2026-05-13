@@ -20,9 +20,12 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param (
-    [string]$QGISProfile = 'default',
+    [string]$QGISProfile  = 'default',
     [string]$QGISPythonExe = '',   # Override path to QGIS embedded python3.exe
-    [switch]$SkipDeps              # Skip Python dependency installation
+    [switch]$SkipDeps,             # Skip Python dependency installation
+    [switch]$InstallHeifEnc,       # Download & install pre-built heif-enc for TB21 HEIF export
+    [string]$HeifEncRelease = ''   # Specific GitHub release tag, e.g. 'libheif-windows-v1.19.7'
+                                   # Leave empty to use the latest release automatically
 )
 
 Set-StrictMode -Version Latest
@@ -37,6 +40,7 @@ function Write-Fail { param([string]$msg) Write-Host "  [FAIL] $msg" -Foreground
 # ── Plugin identity ────────────────────────────────────────────────────
 $PluginId      = 'heif_ttl_importer'
 $PluginName    = 'GIMI Imagery Workbench'
+$GithubRepo    = 'luciocola/GIMI-imagery-workbench'   # used for heif-enc release download
 
 # Files to copy (relative to this script's directory)
 $PluginFiles = @(
@@ -206,6 +210,119 @@ if (-not $SkipDeps) {
     Write-Host "  Install manually in QGIS Python Console:" -ForegroundColor Yellow
     Write-Host "    import subprocess, sys"
     Write-Host "    subprocess.run([sys.executable,'-m','pip','install','pillow','pillow-heif','blake3'])"
+}
+
+# ── Install pre-built heif-enc (optional) ─────────────────────────────
+if ($InstallHeifEnc) {
+    Write-Host ""
+    Write-Host "=== Installing pre-built heif-enc ===" -ForegroundColor White
+    Write-Host "  Source: github.com/$GithubRepo releases" -ForegroundColor Cyan
+
+    $HeifEncDir = Join-Path $env:LOCALAPPDATA 'GIMI_heif_enc'
+
+    try {
+        # ── Find the release asset URL ──────────────────────────────────
+        $assetUrl = $null
+
+        if ($HeifEncRelease) {
+            # Explicit tag requested
+            $apiUrl = "https://api.github.com/repos/$GithubRepo/releases/tags/$HeifEncRelease"
+        } else {
+            # Latest release
+            $apiUrl = "https://api.github.com/repos/$GithubRepo/releases/latest"
+        }
+
+        Write-Info "Querying GitHub API: $apiUrl"
+        $headers = @{ 'User-Agent' = 'GIMI-install_windows.ps1' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+
+        foreach ($asset in $release.assets) {
+            if ($asset.name -like 'heif-enc-windows-x64*.zip') {
+                $assetUrl    = $asset.browser_download_url
+                $assetName   = $asset.name
+                $releaseTag  = $release.tag_name
+                break
+            }
+        }
+
+        if (-not $assetUrl) {
+            Write-Warn "No 'heif-enc-windows-x64*.zip' asset found in release '$($release.tag_name)'."
+            Write-Warn "Run the 'Build libheif (Windows x64)' GitHub Actions workflow first, then"
+            Write-Warn "push a tag matching 'libheif-windows-*' to trigger a release."
+            Write-Warn "Re-run this installer with -InstallHeifEnc once the release exists."
+        } else {
+            Write-Info "Found asset: $assetName  (release $releaseTag)"
+            Write-Info "Downloading from: $assetUrl"
+
+            # ── Download ZIP ────────────────────────────────────────────
+            $tmpZip = Join-Path $env:TEMP 'heif-enc-windows-x64.zip'
+            Invoke-WebRequest -Uri $assetUrl -OutFile $tmpZip -UseBasicParsing -ErrorAction Stop
+            $zipSizeMB = [math]::Round((Get-Item $tmpZip).Length / 1MB, 1)
+            Write-Ok "Downloaded $zipSizeMB MB → $tmpZip"
+
+            # ── Extract ─────────────────────────────────────────────────
+            if (Test-Path $HeifEncDir) {
+                Remove-Item -Recurse -Force $HeifEncDir
+            }
+            New-Item -ItemType Directory -Path $HeifEncDir -Force | Out-Null
+            Expand-Archive -Path $tmpZip -DestinationPath $HeifEncDir -Force
+            Remove-Item $tmpZip -Force
+
+            $heifExe = Join-Path $HeifEncDir 'heif-enc.exe'
+            if (-not (Test-Path $heifExe)) {
+                Write-Warn "heif-enc.exe not found after extraction in $HeifEncDir"
+                Write-Warn "Contents: $(Get-ChildItem $HeifEncDir | Select-Object -ExpandProperty Name)"
+            } else {
+                Write-Ok "heif-enc installed to: $heifExe"
+
+                # ── Write path into local_secrets.py ───────────────────
+                $secretsFile = Join-Path $TargetDir 'local_secrets.py'
+                if (Test-Path $secretsFile) {
+                    $content = Get-Content $secretsFile -Raw
+
+                    # Update or append HEIF_ENC_PATH
+                    $escaped = $heifExe -replace '\\', '\\\\'
+                    if ($content -match 'HEIF_ENC_PATH\s*=') {
+                        $content = $content -replace "HEIF_ENC_PATH\s*=.*", "HEIF_ENC_PATH = r'$heifExe'"
+                        Write-Info "Updated HEIF_ENC_PATH in local_secrets.py"
+                    } else {
+                        $content += "`n# Path to heif-enc.exe for TB21 GIMI HEIF export`n"
+                        $content += "HEIF_ENC_PATH = r'$heifExe'`n"
+                        Write-Info "Added HEIF_ENC_PATH to local_secrets.py"
+                    }
+                    $content | Out-File -Encoding UTF8 $secretsFile
+                    Write-Ok "local_secrets.py updated with HEIF_ENC_PATH"
+                } else {
+                    Write-Warn "local_secrets.py not found at $secretsFile"
+                    Write-Warn "Add manually:  HEIF_ENC_PATH = r'$heifExe'"
+                }
+
+                Write-Host ""
+                Write-Host "  heif-enc is now available for TB21 GIMI HEIF export." -ForegroundColor Green
+                Write-Host "  The GIMI plugin will detect it automatically at startup." -ForegroundColor Green
+
+                # Show BUILD_INFO if present
+                $buildInfo = Join-Path $HeifEncDir 'BUILD_INFO.json'
+                if (Test-Path $buildInfo) {
+                    Write-Host ""
+                    Write-Host "  Build info:" -ForegroundColor Cyan
+                    Get-Content $buildInfo | Write-Host
+                }
+            }
+        }
+    } catch {
+        Write-Warn "heif-enc installation failed: $_"
+        Write-Host ""
+        Write-Host "  Manual alternative:" -ForegroundColor Yellow
+        Write-Host "  1. Go to: https://github.com/$GithubRepo/releases"
+        Write-Host "  2. Download 'heif-enc-windows-x64.zip' from the latest release"
+        Write-Host "  3. Extract to a folder, e.g. C:\tools\heif-enc\"
+        Write-Host "  4. Add that folder to your PATH, or set in the QGIS plugin's local_secrets.py:"
+        Write-Host "       HEIF_ENC_PATH = r'C:\tools\heif-enc\heif-enc.exe'"
+    }
+} else {
+    Write-Host ""
+    Write-Info "Tip: run with -InstallHeifEnc to also download heif-enc.exe for TB21 GIMI export."
 }
 
 # ── Summary ────────────────────────────────────────────────────────────

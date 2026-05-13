@@ -458,25 +458,68 @@ class HEIFProcessor:
             True if heif-enc is available, False otherwise
         """
         import subprocess
-        
-        for cmd in ['heif-enc', '/usr/local/bin/heif-enc', os.path.expanduser('~/Downloads/libheif/build/examples/heif-enc')]:
+        import platform
+
+        # ── Candidate paths to probe ────────────────────────────────────────
+        candidates = []
+
+        # 1. Explicit override from local_secrets.py  (highest priority)
+        try:
             try:
-                result = subprocess.run([cmd, '--version'], 
-                                      capture_output=True, 
-                                      text=True, 
-                                      timeout=5)
+                from .local_secrets import HEIF_ENC_PATH as _hep
+            except ImportError:
+                from local_secrets import HEIF_ENC_PATH as _hep  # type: ignore[no-redef]
+            if _hep:
+                candidates.append(_hep)
+        except (ImportError, AttributeError):
+            pass
+
+        # 2. Environment variable override
+        env_path = os.environ.get('HEIF_ENC_PATH', '')
+        if env_path:
+            candidates.append(env_path)
+
+        if platform.system() == 'Windows':
+            # 3. Windows-specific well-known locations
+            local_app = os.environ.get('LOCALAPPDATA', '')
+            candidates += [
+                'heif-enc.exe',
+                os.path.join(local_app, 'GIMI_heif_enc', 'heif-enc.exe') if local_app else '',
+                r'C:\tools\heif-enc\heif-enc.exe',
+                r'C:\Program Files\libheif\bin\heif-enc.exe',
+                r'C:\Program Files (x86)\libheif\bin\heif-enc.exe',
+                os.path.join(os.environ.get('ProgramFiles', ''), 'libheif', 'bin', 'heif-enc.exe'),
+            ]
+        else:
+            # 4. Unix / macOS paths
+            candidates += [
+                'heif-enc',
+                '/usr/local/bin/heif-enc',
+                '/opt/homebrew/bin/heif-enc',
+                '/usr/bin/heif-enc',
+                os.path.expanduser('~/Downloads/libheif/build/examples/heif-enc'),
+                os.path.expanduser('~/.local/bin/heif-enc'),
+            ]
+
+        for cmd in candidates:
+            if not cmd:
+                continue
+            try:
+                result = subprocess.run([cmd, '--version'],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=5)
                 if result.returncode == 0 or 'heif-enc' in result.stdout or 'heif-enc' in result.stderr:
                     self.heif_enc_cmd = cmd
                     print(f"Found heif-enc at: {cmd}")
-                    
+
                     # Check for advanced features in help output
-                    help_result = subprocess.run([cmd, '--help'], 
-                                                capture_output=True, 
-                                                text=True, 
-                                                timeout=5)
+                    help_result = subprocess.run([cmd, '--help'],
+                                                 capture_output=True,
+                                                 text=True,
+                                                 timeout=5)
                     help_text = help_result.stdout + help_result.stderr
-                    
-                    # Check for tiling support
+
                     if '--tiled-input' in help_text:
                         print("  ✓ Tiled image encoding supported")
                     if '--unci' in help_text or '--uncompressed' in help_text:
@@ -485,7 +528,7 @@ class HEIFProcessor:
                     if '--sai-data-file' in help_text:
                         print("  ✓ SAI metadata supported (GIMI content IDs)")
                         self.supports_sai = True
-                    
+
                     return True
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 continue
