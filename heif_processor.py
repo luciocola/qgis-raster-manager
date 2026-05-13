@@ -2348,45 +2348,50 @@ class HEIFProcessor:
             }
             
             resample_alg = resample_map.get(resample_method.lower(), gdal.GRA_Cubic)
-            
-            # Set transformation type based on order
+
+            def _warp(out_path, transformer_opts):
+                wo = gdal.WarpOptions(
+                    format='GTiff',
+                    resampleAlg=resample_alg,
+                    transformerOptions=transformer_opts,
+                    creationOptions=['COMPRESS=LZW', 'TILED=YES', 'BIGTIFF=IF_SAFER'],
+                    multithread=True,
+                    errorThreshold=0.125,
+                )
+                return gdal.Warp(out_path, input_geotiff, options=wo)
+
+            # ---- choose transformer and fallback ----
             if transform_order == -1:
-                # Thin Plate Spline - best for non-linear distortions
-                transformer = 'tps'
-                print(f"Using Thin Plate Spline (TPS) transformation")
+                # Thin Plate Spline
+                print("Using Thin Plate Spline (TPS) transformation")
+                result = _warp(output_path, ['METHOD=GCP_TPS'])
             else:
-                # Polynomial transformation
-                transformer = f'polynomial:{transform_order}'
+                # Polynomial: correct GDAL option is MAX_GCP_ORDER=N
                 print(f"Using {transform_order} order polynomial transformation")
-            
-            # Warp options with polynomial transformation
-            warp_options = gdal.WarpOptions(
-                format='GTiff',
-                resampleAlg=resample_alg,
-                transformerOptions=[f'METHOD={transformer.upper()}'],
-                creationOptions=['COMPRESS=LZW', 'TILED=YES', 'BIGTIFF=IF_SAFER'],
-                multithread=True,
-                errorThreshold=0.125  # Maximum error in pixels
-            )
-            
-            # Perform the orthorectification
-            print(f"Orthorectifying with {transformer} transformation...")
-            result = gdal.Warp(output_path, input_geotiff, options=warp_options)
-            
+                print(f"Orthorectifying with polynomial:{transform_order} transformation...")
+                result = _warp(output_path, [f'MAX_GCP_ORDER={transform_order}'])
+
+                if result is None:
+                    # Polynomial failed (ill-conditioned GCPs) — fall back to TPS
+                    import os as _os
+                    if _os.path.exists(output_path):
+                        _os.remove(output_path)
+                    print(f"Polynomial order {transform_order} failed; falling back to TPS...")
+                    result = _warp(output_path, ['METHOD=GCP_TPS'])
+
             if result is None:
                 print(f"Orthorectification failed for {input_geotiff}")
                 return False
-            
-            # Get transformation statistics if available
+
             result_stats = result.GetMetadata()
-            result = None  # Close dataset
-            
+            result = None  # close dataset
+
             print(f"Orthorectified GeoTIFF created: {output_path}")
             if 'STATISTICS_MEAN' in result_stats:
                 print(f"  Statistics: Mean={result_stats.get('STATISTICS_MEAN')}")
-            
+
             return True
-            
+
         except Exception as e:
             print(f"Error during orthorectification: {e}")
             return False
