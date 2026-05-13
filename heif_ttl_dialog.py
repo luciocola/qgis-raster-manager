@@ -2948,10 +2948,7 @@ class HEIFTTLImporterDialog(QDialog, FORM_CLASS):
         """Called when import process is complete"""
         self.ready_to_process = False
         self.btnClose.setEnabled(True)
-        if success:
-            # Close dialog on success
-            self.accept()
-        # If not success, keep dialog open so user can try again
+        # Keep dialog open regardless of success so user can run further imports
 
     # ==================================================================
     # DJI DRONE TAB
