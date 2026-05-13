@@ -6043,18 +6043,27 @@ class _HSIBatchWorker(QObject):
 # =============================================================================
 
 class _IPFSUploadDialog(QDialog):
-    """Standalone dialog replicating the 'Upload to IPFS' tab from the
-    Asbestos HSI Manager.  Accepts any local file for upload."""
+    """Upload one or more files to IPFS.
+
+    Workflow:
+      1. User adds any number of files via 'Add Files…'.
+      2. On upload each file's BLAKE3 hash (SHA-256 fallback) is computed.
+      3. All files are zipped together with a manifest.json.
+      4. The zip itself is hashed (BLAKE3).
+      5. The zip is uploaded to IPFS.
+      6. The full manifest JSON (per-file hashes + zip hash + CID) is shown
+         in the status panel and stored in self._last_manifest for blockchain.
+    """
 
     def __init__(self, parent=None, initial_path=''):
         super().__init__(parent)
         self.setWindowTitle('Upload to IPFS')
-        self.setMinimumWidth(640)
-        self.setMinimumHeight(560)
-        self._file_to_upload = None   # path selected by user
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(620)
+        self._initial_path = initial_path or ''
         self._last_ipfs_url = None
         self._last_cid = None
-        self._initial_path = initial_path or ''
+        self._last_manifest = None   # dict — passed to blockchain dialog
         self._init_ui()
 
     # ------------------------------------------------------------------
@@ -6064,28 +6073,40 @@ class _IPFSUploadDialog(QDialog):
     def _init_ui(self):
         from PyQt5.QtWidgets import (
             QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
-            QLabel, QLineEdit, QPushButton, QCheckBox, QComboBox,
-            QSlider, QSpinBox, QTextEdit, QDialogButtonBox, QFileDialog,
+            QLabel, QLineEdit, QPushButton, QListWidget, QAbstractItemView,
+            QCheckBox, QComboBox, QSlider, QTextEdit, QFileDialog,
         )
         from PyQt5.QtCore import Qt
 
         root = QVBoxLayout(self)
         root.setSpacing(8)
 
-        # ── File selection ──────────────────────────────────────────────
-        grp_file = QGroupBox('File to Upload')
-        hl_file = QHBoxLayout(grp_file)
-        self._le_file = QLineEdit()
-        self._le_file.setPlaceholderText('Select a file or directory to upload to IPFS…')
-        self._le_file.setReadOnly(False)
-        if self._initial_path:
-            self._le_file.setText(self._initial_path)
-        btn_browse = QPushButton('Browse…')
-        btn_browse.setMaximumWidth(90)
-        btn_browse.clicked.connect(self._browse_file)
-        hl_file.addWidget(self._le_file)
-        hl_file.addWidget(btn_browse)
-        root.addWidget(grp_file)
+        # ── File list ───────────────────────────────────────────────────
+        grp_files = QGroupBox('Files to Upload')
+        vl_files = QVBoxLayout(grp_files)
+
+        self._lw_files = QListWidget()
+        self._lw_files.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._lw_files.setMinimumHeight(110)
+        vl_files.addWidget(self._lw_files)
+
+        hl_file_btns = QHBoxLayout()
+        btn_add = QPushButton('Add Files…')
+        btn_add.clicked.connect(self._add_files)
+        btn_remove = QPushButton('Remove Selected')
+        btn_remove.clicked.connect(self._remove_selected)
+        btn_clear = QPushButton('Clear All')
+        btn_clear.clicked.connect(self._lw_files.clear)
+        hl_file_btns.addWidget(btn_add)
+        hl_file_btns.addWidget(btn_remove)
+        hl_file_btns.addWidget(btn_clear)
+        hl_file_btns.addStretch()
+        vl_files.addLayout(hl_file_btns)
+        root.addWidget(grp_files)
+
+        # Pre-fill from initial_path
+        if self._initial_path and __import__('os').path.isfile(self._initial_path):
+            self._lw_files.addItem(self._initial_path)
 
         # ── Compression options ─────────────────────────────────────────
         grp_comp = QGroupBox('Compression Options')
@@ -6113,17 +6134,14 @@ class _IPFSUploadDialog(QDialog):
         self._slider_quality.valueChanged.connect(self._update_quality_label)
         gl_comp.addWidget(self._slider_quality, 2, 1)
         gl_comp.addWidget(self._lbl_quality, 2, 2)
-
-        gl_comp.addWidget(QLabel('Max File Size:'), 3, 0)
-        gl_comp.addWidget(QLabel('10 MB  (IPFS upload limit)'), 3, 1)
         root.addWidget(grp_comp)
 
-        # ── Upload status ───────────────────────────────────────────────
-        grp_status = QGroupBox('Upload Status')
+        # ── Upload status / log ─────────────────────────────────────────
+        grp_status = QGroupBox('Log')
         vl_status = QVBoxLayout(grp_status)
         self._txt_status = QTextEdit()
         self._txt_status.setReadOnly(True)
-        self._txt_status.setMaximumHeight(160)
+        self._txt_status.setMinimumHeight(140)
         vl_status.addWidget(self._txt_status)
         root.addWidget(grp_status)
 
@@ -6138,6 +6156,10 @@ class _IPFSUploadDialog(QDialog):
         self._le_cid = QLineEdit()
         self._le_cid.setReadOnly(True)
         gl_res.addWidget(self._le_cid, 1, 1)
+        gl_res.addWidget(QLabel('Zip BLAKE3:'), 2, 0)
+        self._le_zip_hash = QLineEdit()
+        self._le_zip_hash.setReadOnly(True)
+        gl_res.addWidget(self._le_zip_hash, 2, 1)
         root.addWidget(grp_result)
 
         # ── Buttons ─────────────────────────────────────────────────────
@@ -6149,6 +6171,12 @@ class _IPFSUploadDialog(QDialog):
             'QPushButton:disabled { background-color: #cccccc; color: #888888; }')
         self._btn_upload.clicked.connect(self._do_upload)
         hl_btns.addWidget(self._btn_upload)
+
+        self._btn_copy_json = QPushButton('Copy Manifest JSON')
+        self._btn_copy_json.setMinimumHeight(36)
+        self._btn_copy_json.setEnabled(False)
+        self._btn_copy_json.clicked.connect(self._copy_manifest)
+        hl_btns.addWidget(self._btn_copy_json)
         hl_btns.addStretch()
 
         btn_close = QPushButton('Close')
@@ -6158,8 +6186,28 @@ class _IPFSUploadDialog(QDialog):
         root.addLayout(hl_btns)
 
     # ------------------------------------------------------------------
-    # Slots
+    # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _hash_file(path: str) -> tuple:
+        """Return (algorithm_name, hex_digest) for a file using BLAKE3
+        if available, otherwise SHA-256."""
+        try:
+            import blake3 as _b3
+            h = _b3.blake3()
+            algo = 'blake3'
+        except ImportError:
+            import hashlib
+            h = hashlib.sha256()
+            algo = 'sha256'
+        with open(path, 'rb') as fh:
+            while True:
+                chunk = fh.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return algo, h.hexdigest()
 
     def _update_quality_label(self, value: int):
         if value >= 90:
@@ -6172,79 +6220,168 @@ class _IPFSUploadDialog(QDialog):
             desc = 'Low quality, very small size'
         self._lbl_quality.setText(f'{value}%  ({desc})')
 
-    def _browse_file(self):
-        from PyQt5.QtWidgets import QFileDialog
-        import os
-        path, _ = QFileDialog.getOpenFileName(
-            self, 'Select File to Upload', os.path.expanduser('~'),
-            'All Files (*)')
-        if path:
-            self._le_file.setText(path)
-            self._file_to_upload = path
-
     def _status(self, msg: str):
         self._txt_status.append(msg)
         from PyQt5.QtWidgets import QApplication
         QApplication.processEvents()
 
+    def _file_paths(self) -> list:
+        return [self._lw_files.item(i).text()
+                for i in range(self._lw_files.count())]
+
+    # ------------------------------------------------------------------
+    # Slots
+    # ------------------------------------------------------------------
+
+    def _add_files(self):
+        from PyQt5.QtWidgets import QFileDialog
+        import os
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, 'Add Files to Upload',
+            self._initial_path or os.path.expanduser('~'),
+            'All Files (*)')
+        existing = set(self._file_paths())
+        for p in paths:
+            if p not in existing:
+                self._lw_files.addItem(p)
+                existing.add(p)
+
+    def _remove_selected(self):
+        for item in self._lw_files.selectedItems():
+            self._lw_files.takeItem(self._lw_files.row(item))
+
+    def _copy_manifest(self):
+        if self._last_manifest:
+            import json
+            from PyQt5.QtWidgets import QApplication
+            QApplication.clipboard().setText(
+                json.dumps(self._last_manifest, indent=2))
+
     def _do_upload(self):
-        import os, importlib.util as _ilu
+        import os, json, zipfile, tempfile, importlib.util as _ilu
+        from datetime import datetime, timezone
         from PyQt5.QtWidgets import QMessageBox, QProgressDialog
         from PyQt5.QtCore import Qt
 
-        file_path = self._le_file.text().strip()
-        if not file_path or not os.path.exists(file_path):
-            QMessageBox.warning(self, 'No File', 'Please select a file to upload.')
+        file_paths = self._file_paths()
+        if not file_paths:
+            QMessageBox.warning(self, 'No Files', 'Add at least one file to upload.')
+            return
+        missing = [p for p in file_paths if not os.path.isfile(p)]
+        if missing:
+            QMessageBox.warning(self, 'Missing Files',
+                                'These files no longer exist:\n' + '\n'.join(missing))
             return
 
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if file_size_mb > 10:
-            QMessageBox.warning(
-                self, 'File Too Large',
-                f'The file ({file_size_mb:.2f} MB) exceeds the 10 MB limit.\n\n'
-                'Please compress or resize the file before uploading.')
-            return
-
-        # Load IPFSUploader from the asbestos_hsi_manager plugin
+        # Load IPFSUploader
         _asbestos_dir = '/Users/luciocolaiacomo/4113Eng-wfs/cop_defence_stac/asbestos_hsi_manager'
         try:
-            # Load oidc_auth first (dependency)
             _oidc_spec = _ilu.spec_from_file_location(
                 '_oidc_auth_gimi', f'{_asbestos_dir}/oidc_auth.py')
             _oidc_mod = _ilu.module_from_spec(_oidc_spec)
             _oidc_spec.loader.exec_module(_oidc_mod)
-
-            # Load ipfs_uploader
             _up_spec = _ilu.spec_from_file_location(
                 '_ipfs_uploader_gimi', f'{_asbestos_dir}/ipfs_uploader.py')
             _up_mod = _ilu.module_from_spec(_up_spec)
-            # Inject oidc_auth into the module's namespace so relative import works
-            import sys as _sys
             _up_mod.OIDCAuthenticator = _oidc_mod.OIDCAuthenticator
             _up_spec.loader.exec_module(_up_mod)
             IPFSUploader = _up_mod.IPFSUploader
         except Exception as exc:
-            QMessageBox.critical(
-                self, 'Module Error',
-                f'Could not load IPFSUploader:\n{exc}')
+            QMessageBox.critical(self, 'Module Error',
+                                 f'Could not load IPFSUploader:\n{exc}')
             return
 
         self._txt_status.clear()
         self._le_ipfs_url.clear()
         self._le_cid.clear()
+        self._le_zip_hash.clear()
         self._btn_upload.setEnabled(False)
+        self._btn_copy_json.setEnabled(False)
 
-        progress = QProgressDialog('Uploading to IPFS…', 'Cancel', 0, 0, self)
+        progress = QProgressDialog('Preparing files…', None, 0, 0, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
 
         try:
+            # ── Step 1: hash each file ──────────────────────────────────
+            self._status('── Hashing files ──')
+            file_entries = []
+            for p in file_paths:
+                algo, digest = self._hash_file(p)
+                size = os.path.getsize(p)
+                name = os.path.basename(p)
+                file_entries.append({
+                    'name': name,
+                    'path': p,
+                    algo: digest,
+                    'size_bytes': size,
+                })
+                self._status(f'  {name}')
+                self._status(f'    {algo.upper()}: {digest}')
+                self._status(f'    size: {size:,} bytes')
+
+            # ── Step 2: build manifest (without zip hash yet) ───────────
+            ts = datetime.now(timezone.utc).isoformat()
+            manifest = {
+                'generator': 'GIMI Imagery Workbench',
+                'timestamp': ts,
+                'file_count': len(file_entries),
+                'files': file_entries,
+                'archive': {},
+                'ipfs': {},
+            }
+
+            # ── Step 3: create zip in temp dir ──────────────────────────
+            tmp_dir = tempfile.mkdtemp(prefix='gimi_ipfs_')
+            zip_name = f'gimi_upload_{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")}.zip'
+            zip_path = os.path.join(tmp_dir, zip_name)
+
+            self._status(f'\n── Creating archive: {zip_name} ──')
+            progress.setLabelText('Creating zip archive…')
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for entry in file_entries:
+                    zf.write(entry['path'], arcname=entry['name'])
+                    self._status(f'  + {entry["name"]}')
+                # embed manifest (without zip hash — placeholder)
+                zf.writestr('manifest.json',
+                            json.dumps(manifest, indent=2))
+
+            # ── Step 4: hash the zip ────────────────────────────────────
+            progress.setLabelText('Hashing archive…')
+            zip_algo, zip_digest = self._hash_file(zip_path)
+            zip_size = os.path.getsize(zip_path)
+            self._status(f'\n── Archive hash ──')
+            self._status(f'  {zip_algo.upper()}: {zip_digest}')
+            self._status(f'  size: {zip_size:,} bytes')
+
+            # ── Step 5: re-write zip with final manifest ────────────────
+            manifest['archive'] = {
+                'name': zip_name,
+                zip_algo: zip_digest,
+                'size_bytes': zip_size,
+            }
+            # Reopen zip and replace manifest.json
+            with zipfile.ZipFile(zip_path, 'a', zipfile.ZIP_DEFLATED) as zf:
+                # ZipFile 'a' doesn't support overwrite — delete & re-add
+                pass
+            # Rebuild zip cleanly
+            zip_path2 = zip_path + '.final.zip'
+            with zipfile.ZipFile(zip_path2, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for entry in file_entries:
+                    zf.write(entry['path'], arcname=entry['name'])
+                zf.writestr('manifest.json',
+                            json.dumps(manifest, indent=2))
+            os.replace(zip_path2, zip_path)
+
+            # ── Step 6: upload zip to IPFS ──────────────────────────────
+            self._status('\n── Uploading to IPFS ──')
+            progress.setLabelText('Uploading to IPFS…')
             uploader = IPFSUploader()
-            result = uploader.upload(file_path, status_callback=self._status)
+            result = uploader.upload(zip_path, status_callback=self._status)
             progress.close()
 
             if not result.get('success'):
-                QMessageBox.warning(self, 'Upload Failed', 'IPFS upload failed.')
+                QMessageBox.warning(self, 'Upload Failed', 'IPFS upload returned failure.')
                 return
 
             ipfs_url = result.get('location', '')
@@ -6254,18 +6391,37 @@ class _IPFSUploadDialog(QDialog):
             elif ipfs_url and not ipfs_url.startswith('http'):
                 ipfs_url = f'https://ipfs.demo.secd.eu/files/{ipfs_url}'
 
+            manifest['ipfs'] = {'cid': cid, 'url': ipfs_url}
+
+            # ── Step 7: display results ─────────────────────────────────
             self._last_ipfs_url = ipfs_url
             self._last_cid = cid
+            self._last_manifest = manifest
             self._le_ipfs_url.setText(ipfs_url)
             self._le_cid.setText(cid)
-            self._status(f'✓ Upload successful!')
+            self._le_zip_hash.setText(f'{zip_algo.upper()}: {zip_digest}')
+            self._btn_copy_json.setEnabled(True)
+
+            self._status(f'\n✓ Upload successful!')
+            self._status(f'   CID:      {cid}')
             self._status(f'   IPFS URL: {ipfs_url}')
-            self._status(f'   CID: {cid}')
+            self._status(f'\n── Blockchain manifest (JSON) ──')
+            self._status(json.dumps(manifest, indent=2))
+
             QMessageBox.information(
                 self, 'Upload Successful',
-                f'File uploaded to IPFS!\n\n'
-                f'URL: {ipfs_url}\n'
-                f'CID: {cid}')
+                f'{len(file_entries)} file(s) zipped and uploaded.\n\n'
+                f'CID: {cid}\n'
+                f'Zip {zip_algo.upper()}: {zip_digest}\n\n'
+                f'Use "Copy Manifest JSON" to get the full\n'
+                f'blockchain registration payload.')
+
+            # Cleanup temp dir
+            try:
+                import shutil
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
         except Exception as exc:
             progress.close()
