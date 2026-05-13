@@ -6353,6 +6353,120 @@ class _IPFSUploadDialog(QDialog):
                 'ipfs': {},
             }
 
+            # ── Step 2b: compress files to ≤ 9 MB if checkbox enabled ──
+            MAX_BYTES = 9 * 1024 * 1024  # 9 MB hard cap
+            compress_enabled = self._chk_compress.isChecked()
+            compress_type = self._cmb_compress_type.currentText()  # JPEG / JPEG2000 / LZW
+            quality = self._slider_quality.value()
+
+            tmp_compress_dir = None
+            if compress_enabled:
+                tmp_compress_dir = tempfile.mkdtemp(prefix='gimi_compress_')
+                self._status(f'\n── Reducing file size (target ≤ 9 MB, type={compress_type}, q={quality}) ──')
+                progress.setLabelText('Compressing files…')
+                compressed_entries = []
+                for entry in file_entries:
+                    src = entry['path']
+                    name = entry['name']
+                    ext = os.path.splitext(name)[1].lower()
+                    out_path = None
+
+                    # ---- raster files: use GDAL ----
+                    raster_exts = {'.tif', '.tiff', '.jp2', '.heif', '.heic', '.png', '.bmp'}
+                    image_exts  = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif'}
+
+                    if ext in raster_exts:
+                        try:
+                            from osgeo import gdal as _gdal
+                            ds = _gdal.Open(src)
+                            if ds is not None:
+                                out_name = os.path.splitext(name)[0]
+                                if compress_type == 'JPEG2000':
+                                    out_name += '_compressed.jp2'
+                                    driver = 'JP2OpenJPEG'
+                                    co = [f'QUALITY={quality}', 'REVERSIBLE=NO']
+                                elif compress_type == 'LZW':
+                                    out_name += '_compressed.tif'
+                                    driver = 'GTiff'
+                                    co = ['COMPRESS=LZW', 'PREDICTOR=2', 'TILED=YES']
+                                else:  # JPEG
+                                    out_name += '_compressed.jpg'
+                                    driver = 'JPEG'
+                                    co = [f'QUALITY={quality}']
+                                out_path = os.path.join(tmp_compress_dir, out_name)
+                                _gdal.Translate(out_path, ds, format=driver,
+                                                creationOptions=co)
+                                ds = None
+                                if not os.path.exists(out_path):
+                                    out_path = None  # fallback to Pillow
+                        except Exception as _ge:
+                            self._status(f'  GDAL compress failed for {name}: {_ge} — trying Pillow')
+                            out_path = None
+
+                    # ---- image files (or GDAL fallback): use Pillow ----
+                    if out_path is None and (ext in image_exts or ext in raster_exts):
+                        try:
+                            from PIL import Image as _PILImage
+                            img = _PILImage.open(src)
+                            if compress_type == 'JPEG2000':
+                                out_name = os.path.splitext(name)[0] + '_compressed.jp2'
+                                out_path = os.path.join(tmp_compress_dir, out_name)
+                                img.save(out_path, 'JPEG2000',
+                                         quality_mode='rates', quality_layers=[1 - quality/100])
+                            elif compress_type == 'LZW':
+                                out_name = os.path.splitext(name)[0] + '_compressed.png'
+                                out_path = os.path.join(tmp_compress_dir, out_name)
+                                img.save(out_path, 'PNG', optimize=True)
+                            else:  # JPEG
+                                out_name = os.path.splitext(name)[0] + '_compressed.jpg'
+                                out_path = os.path.join(tmp_compress_dir, out_name)
+                                if img.mode in ('RGBA', 'P', 'LA'):
+                                    img = img.convert('RGB')
+                                img.save(out_path, 'JPEG', quality=quality, optimize=True)
+                        except Exception as _pe:
+                            self._status(f'  Pillow compress failed for {name}: {_pe} — using original')
+                            out_path = None
+
+                    # ---- enforce ≤ 9 MB: iteratively lower quality ----
+                    if out_path and os.path.exists(out_path):
+                        file_sz = os.path.getsize(out_path)
+                        q_iter = quality
+                        while file_sz > MAX_BYTES and q_iter > 10 and compress_type in ('JPEG', 'JPEG2000'):
+                            q_iter = max(10, q_iter - 10)
+                            try:
+                                from PIL import Image as _PILImage
+                                img2 = _PILImage.open(src)
+                                if img2.mode in ('RGBA', 'P', 'LA'):
+                                    img2 = img2.convert('RGB')
+                                img2.save(out_path, 'JPEG', quality=q_iter, optimize=True)
+                                file_sz = os.path.getsize(out_path)
+                            except Exception:
+                                break
+                        if file_sz > MAX_BYTES:
+                            self._status(f'  ⚠ {name}: still {file_sz:,} bytes after compression '
+                                         f'(≤ 9 MB target not met — including anyway)')
+                        else:
+                            self._status(f'  ✓ {name}: {entry["size_bytes"]:,} → {file_sz:,} bytes')
+
+                        # re-hash compressed file
+                        algo_c, digest_c = self._hash_file(out_path)
+                        new_entry = dict(entry)
+                        new_entry['path'] = out_path
+                        new_entry['name'] = os.path.basename(out_path)
+                        new_entry[algo_c] = digest_c
+                        new_entry['size_bytes'] = file_sz
+                        new_entry['original_name'] = name
+                        new_entry['original_size_bytes'] = entry['size_bytes']
+                        compressed_entries.append(new_entry)
+                    else:
+                        # Non-compressible file (JSON, TTL, PDF …): keep as-is
+                        self._status(f'  → {name}: kept as-is (not an image/raster)')
+                        compressed_entries.append(entry)
+
+                file_entries = compressed_entries
+                manifest['file_count'] = len(file_entries)
+                manifest['files'] = file_entries
+
             # ── Step 3: create zip in temp dir ──────────────────────────
             tmp_dir = tempfile.mkdtemp(prefix='gimi_ipfs_')
             zip_name = f'gimi_upload_{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")}.zip'
@@ -6438,10 +6552,12 @@ class _IPFSUploadDialog(QDialog):
                 f'Use "Copy Manifest JSON" to get the full\n'
                 f'blockchain registration payload.')
 
-            # Cleanup temp dir
+            # Cleanup temp dirs
             try:
                 import shutil
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+                if tmp_compress_dir:
+                    shutil.rmtree(tmp_compress_dir, ignore_errors=True)
             except Exception:
                 pass
 
